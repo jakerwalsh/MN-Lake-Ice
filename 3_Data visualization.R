@@ -1,44 +1,178 @@
-# Variable phenology but consistent loss of ice cover of 1,213 Minnesota lakes
-# Walsh et al. submitted to L&O Letters
-# Data visualization
+# Long-term trends in lake ice
+# Hansen Lab Project (Revisit 2023)
 
 # Dependent on "1_Data set up.R", "2_Model fitting.R"
+
 
 # Data visualization ----
 
 # Packages ----
-# Data manipulation
+# Apologies - some of these are left over from old scripts, and we may not use them.
+
+# The "mnsentinellakes" package is downloaded through github using the package "remotes":
+# install.packages("remotes")
+# remotes::install_github("mnsentinellakes/mnsentinellakes")
+
+# Data manipulation, plotting
 library(tidyverse)
 library(viridis)
-library(lubridate)
-library(data.table)
-library(RCurl)
-
-# Plotting
 library(gridExtra)
 library(grid)
 library(broom)
 library(cowplot)
 library(scales)
 
-# Function for detrending climate indices
+library("googledrive")
+library(data.table)
+library(RCurl)
+
+# Nice for dealing with working directories
+library(here)
+
+# Time series breakpoint analysis
+library(strucchange)
+library(segmented)
+library(trend)# Includes a function for Sen's Slope
 library(pracma)
+
+# Linear mixed effects modeling
+library(lme4)
 
 # GAM
 library(mgcv)
 library(gratia)
+library(gamm4)
 library(itsadug)
-library(parallel)
 
-# Spatial
+library(lubridate)
+library(parallel)
+library(mnsentinellakes)
+
 library(sf)
 library(maps)
 
-# The "mnsentinellakes" package is downloaded through github using the package "remotes":
-install.packages("remotes")
-remotes::install_github("mnsentinellakes/mnsentinellakes")
+# Wavelet analysis
+library(vectorwavelet)
+library(wavelets)
+library(WaveletComp)
 
-library(mnsentinellakes)
+# Data summaries ----
+
+## Plotting raw data ----
+
+p_rawdata <- plot_grid(
+  ggplot() + 
+    geom_line(data=ice_all_condense, aes(x=winter.year, y=min_duration, col=ID), alpha=0.5) + 
+    geom_line(data=ice_all_condense %>% 
+                group_by(winter.year) %>%
+                summarize(min_duration=mean(min_duration),
+                          max_ice_on_julian2=mean(max_ice_on_julian2),
+                          min_ice_off_julian=mean(min_ice_off_julian)), 
+              aes(x=winter.year, y=min_duration), col='black', lwd=1.25) + 
+    scale_color_manual(values=rep("grey", length(unique(ice_all_condense$ID)))) + 
+    scale_y_continuous("Ice cover duration", 
+                       sec.axis = sec_axis(~.*1, 
+                                           breaks=c(100, 150, 200),
+                                           labels=c("           ", "           ", "           "))) +
+    scale_x_continuous("") + 
+    theme_classic(8) + theme(legend.position="none"),
+  
+  ggplot() + 
+    geom_line(data=ice_all_condense, aes(x=winter.year, y=max_ice_on_julian2, col=ID), alpha=0.5) + 
+    geom_line(data=ice_all_condense %>% 
+                group_by(winter.year) %>%
+                summarize(min_duration=mean(min_duration),
+                          max_ice_on_julian2=mean(max_ice_on_julian2),
+                          min_ice_off_julian=mean(min_ice_off_julian)), 
+              aes(x=winter.year, y=max_ice_on_julian2), col='black', lwd=1.25) + 
+    scale_color_manual(values=rep("grey", length(unique(ice_all_condense$ID)))) + 
+    scale_y_continuous("Day of ice formation",
+                       sec.axis = sec_axis(trans=~.*1, 
+                                           breaks = c(288, 305, 319, 335, 349, 366, 380),
+                                           labels = c("Oct 15", "Nov 1", "Nov 15", "Dec 1", "Dec 15", "Jan 1", "Jan 15"))) +
+    scale_x_continuous("") + 
+    theme_classic(8) + theme(legend.position="none"),
+  
+  ggplot() + 
+    geom_line(data=ice_all_condense, aes(x=winter.year, y=min_ice_off_julian, col=ID), alpha=0.5) + 
+    geom_line(data=ice_all_condense %>% 
+                group_by(winter.year) %>%
+                summarize(min_duration=mean(min_duration),
+                          max_ice_on_julian2=mean(max_ice_on_julian2),
+                          min_ice_off_julian=mean(min_ice_off_julian)), 
+              aes(x=winter.year, y=min_ice_off_julian), col='black', lwd=1.25) + 
+    scale_color_manual(values=rep("grey", length(unique(ice_all_condense$ID)))) + 
+    scale_y_continuous("Day of ice breakup",
+                       sec.axis = sec_axis(trans=~.*1,
+                                           breaks=c(60, 74, 91, 105, 121, 135),
+                                           labels=c("Mar 1", "Mar 15", "Apr 1", "Apr 15", "May 1", "May 15"))) +
+    scale_x_continuous("Winter Year") + 
+    theme_classic(8) + theme(legend.position="none"),
+  
+  nrow=3)
+
+## FIGURE--Raw ice cover data----
+
+png("figures/Fig_RawIceCoverData.png", width=3.2, height=6, units='in', res=600)
+p_rawdata
+dev.off()
+
+## Figure--Histogram of time series lengths----
+
+p_timeseries_overlaid <- ggplot() + 
+  geom_histogram(data=iceout_lakesum,
+                 aes(n_years, fill="All breakup"), 
+                 breaks=seq(0, 160, 10), closed='left') + 
+  geom_histogram(data=ice_lakesum,
+                 aes(n_years, fill="Paired formation & breakup"), 
+                 breaks=seq(0, 160, 10), closed='left') + 
+  scale_y_continuous("Number of lakes",
+                     minor_breaks=seq(0, 2000, 100)) + 
+  scale_x_continuous("Time series length (years; binned in 10y intervals)",
+                     breaks=seq(0, 150, 50) + 5,
+                     labels=c("0-9", "50-59", "100-109", "150-159"),
+                     minor_breaks=seq(0, 160, 10) + 5) + 
+  scale_fill_manual(values=c("orange", "skyblue")) + 
+  theme_bw(8) + theme(legend.title = element_blank(),
+                      legend.position = "top")
+
+p_timeseries_overlaid_inset <- ggplot() + 
+  geom_histogram(data=iceout_lakesum %>% filter(n_years>=50),
+                 aes(n_years, fill="All breakup"), 
+                 breaks=seq(50, 160, 10), closed='left') + 
+  geom_histogram(data=ice_lakesum %>% filter(n_years>=50),
+                 aes(n_years, fill="Paired formation & breakup"), 
+                 breaks=seq(50, 160, 10), closed='left') + 
+  scale_y_continuous(minor_breaks=0:20) + 
+  scale_x_continuous(breaks=c(seq(50, 150, 50)) + 5,
+                     labels=c("50-59", "100-109", "150-159"),
+                     minor_breaks=seq(0, 160, 10) + 5) + 
+  scale_fill_manual(values=c("orange", "skyblue")) + 
+  ggtitle("50 years or more") + 
+  theme_bw(8) + theme(legend.title = element_blank(),
+                      legend.position = "none",
+                      axis.title=element_blank(),
+                      plot.background = element_rect(colour='black'),
+                      plot.title = element_text(size=8))
+
+png("figures/Fig_TimeSeriesHistogram_Overlaid.png", width=3.2, height=3.2, units='in', res=600)
+p_timeseries_overlaid + 
+  annotation_custom(ggplotGrob(p_timeseries_overlaid_inset), xmin = 41, xmax = 160, 
+                    ymin = 300, ymax = 1200)
+dev.off()
+
+# Relationship between number of observations and lake area ----
+
+ggplot(data=ice_all_condense %>%
+         group_by(ID) %>%
+         summarize(n=n(), lnArea_acres=mean(lnArea_acres)),
+       aes(x=lnArea_acres, y=n)) + 
+  geom_point() + 
+  geom_smooth(method='gam', formula=y~x, method.args=list(family='nb'),
+              fill='skyblue', col='skyblue') + 
+  scale_x_continuous("natural log Lake Area (acres)") + 
+  scale_y_continuous("Number of observations") + 
+  theme_classic(9)
 
 # Model predictors ----
 reml_gam_final_models_meta
@@ -76,9 +210,9 @@ fun_confint_SD <- function(object, parm){
   confint_i <- confint(object=gam_i, parm=parm) %>%
     mutate(models=object,
            intercept_SD=exp(intercept_SD_i)+0.01,
-           est_shift=exp(est+intercept_SD_i)+0.01,
-           lower_shift=exp(lower+intercept_SD_i)+0.01,
-           upper_shift=exp(upper+intercept_SD_i)+0.01)
+           .estimate_shift=exp(.estimate+intercept_SD_i)+0.01,
+           .lower_ci_shift=exp(.lower_ci+intercept_SD_i)+0.01,
+           .upper_ci_shift=exp(.upper_ci+intercept_SD_i)+0.01)
   
   colnames(confint_i)[4] <- "parm"
   
@@ -91,65 +225,65 @@ predictor_winter.year <- bind_rows(lapply(X=reml_gam_final_models_meta$models, p
 predictor_winter.year <- left_join(predictor_winter.year, reml_gam_final_models_meta, by=c("models"))
 
 p_predictor_winter.year <- ggplot(predictor_winter.year %>% filter(data=='all' & metric != "iceoutlong"), 
-       aes(x=parm, y=est)) + 
+       aes(x=parm, y=.estimate)) + 
   facet_grid(metric~.) + 
   geom_hline(yintercept=0, col='grey') + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2) + 
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2) + 
   geom_line() + 
   ggtitle("a) s(winter.year)") + 
   scale_y_continuous(name="Days from average") +
   scale_x_continuous(name="winter.year (continuous)") + 
-  theme_classic(8) + theme()
+  theme_classic(10) + theme()
 
 ## fwinter.year ----
 predictor_fwinter.year <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s(fwinter.year)", FUN=fun_confint))
 predictor_fwinter.year <- left_join(predictor_fwinter.year, reml_gam_final_models_meta, by=c("models"))
 
 p_predictor_fwinter.year <- ggplot(predictor_fwinter.year %>% filter(data=='all' & metric != "iceoutlong"), 
-       aes(x=as.numeric(as.character(parm)), y=est)) + 
+       aes(x=as.numeric(as.character(parm)), y=.estimate)) + 
   facet_grid(metric~.) + 
   geom_hline(yintercept=0, col='grey') + 
-  geom_errorbar(aes(ymin=lower, ymax=upper), width=0, col='grey') + 
+  geom_errorbar(aes(ymin=.lower_ci, ymax=.upper_ci), width=0, col='grey') + 
   geom_point() + 
   geom_smooth(method='gam', formula=y~s(x,k=20), col='dodgerblue') + 
-  ggtitle("b) s(fwinter.year, bs='re')") + 
+  ggtitle("g) s(fwinter.year, bs='re')") + 
   scale_y_continuous(name="Days from average") +
   scale_x_continuous(name="fwinter.year (random intercept)") + 
-  theme_classic(8) + theme()
+  theme_classic(10) + theme()
 
 ## lnArea_acres ----
 predictor_lnArea_acres <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s(lnArea_acres)", FUN=fun_confint))
 predictor_lnArea_acres <- left_join(predictor_lnArea_acres, reml_gam_final_models_meta, by=c("models"))
 
 p_predictor_lnArea_acres <- ggplot(predictor_lnArea_acres %>% filter(data=='all' & metric != "iceoutlong"), 
-       aes(x=parm, y=est)) + 
+       aes(x=parm, y=.estimate)) + 
   facet_grid(metric~.) + 
   geom_hline(yintercept=0, col='grey') + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2) + 
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2) + 
   geom_line() + 
-  ggtitle("d) s(lnArea_acres)") + 
+  ggtitle("e) s(lnArea_acres)") + 
   scale_y_continuous(name="Days from average") +
   scale_x_continuous(name="lnArea_acres") + 
-  theme_classic(8) + theme()
+  theme_classic(10) + theme()
 
 ## ID ----
 predictor_ID <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s(ID)", FUN=fun_confint))
 predictor_ID <- left_join(predictor_ID, reml_gam_final_models_meta, by=c("models")) %>% 
   group_by(models) %>%
-  arrange(desc(est)) %>%
-  mutate(rank=dense_rank(desc(est))) %>%
+  arrange(desc(.estimate)) %>%
+  mutate(rank=dense_rank(desc(.estimate))) %>%
   ungroup()
 
 p_predictor_ID <- ggplot(predictor_ID %>% filter(data=='all' & metric != "iceoutlong"), 
-       aes(x=rank, y=est)) + 
+       aes(x=rank, y=.estimate)) + 
   facet_grid(metric~.) + 
   geom_hline(yintercept=0, col='grey') + 
-  geom_errorbar(aes(ymin=lower, ymax=upper), width=0, col='grey') + 
+  geom_errorbar(aes(ymin=.lower_ci, ymax=.upper_ci), width=0, col='grey') + 
   geom_point() + 
-  ggtitle("e) s(ID, bs='re')") + 
+  ggtitle("f) s(ID, bs='re')") + 
   scale_y_continuous(name="Days from average") +
   scale_x_continuous(name="Ranked random intercept") + 
-  theme_classic(8) + theme()
+  theme_classic(10) + theme()
 
 ## xy ----
  
@@ -157,42 +291,65 @@ predictor_xy <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s(x,
 predictor_xy <- left_join(predictor_xy, reml_gam_final_models_meta, by=c("models"))
 
 p_predictor_xy <- ggplot(predictor_xy %>% filter(data=='all' & metric != "iceoutlong"), 
-                         aes(x=x/10000, y=y/100000, fill=est)) + 
+                         aes(x=x/10000, y=y/100000, fill=.estimate)) + 
   facet_grid(metric~.) + 
   geom_raster(interpolate=T) + 
-  ggtitle("f) s(x,y)") + 
+  ggtitle("c) s(x,y)") + 
   scale_y_continuous(name="y*100,000") +
   scale_x_continuous(name="x*10,000") + 
   scale_fill_gradient2(name="Days\nfrom avg.") + 
-  theme_classic(8) + theme() 
+  theme_classic(10) + theme() 
 
 ## winter.year SD ----
 predictor_winter.year_SD <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s.1(winter.year)", FUN=fun_confint_SD))
 predictor_winter.year_SD <- left_join(predictor_winter.year_SD, reml_gam_final_models_meta, by=c("models"))
 
 p_predictor_winter.year_SD <- ggplot(predictor_winter.year_SD %>% filter(data=='all' & metric != "iceoutlong"), 
-                                  aes(x=parm, y=est_shift)) + 
+                                  aes(x=parm, y=.estimate_shift)) + 
   facet_grid(metric~.) + 
   #geom_hline(yintercept=0, col='grey') + 
-  geom_ribbon(aes(ymin=lower_shift, ymax=upper_shift), alpha=0.2) + 
+  geom_ribbon(aes(ymin=.lower_ci_shift, ymax=.upper_ci_shift), alpha=0.2) + 
   geom_line() + 
-  ggtitle("c) S.D. s(winter.year)") + 
+  ggtitle("b) S.D. s(winter.year)") + 
   scale_y_continuous(name="S.D.") +
   scale_x_continuous(name="winter.year (continuous)") + 
-  theme_classic(8) + theme()
+  theme_classic(10) + theme()
 
-### FIGURE S1--Multi-panel plot of predictors ----
+## xy SD ----
 
-p_predictor_all <- plot_grid(p_predictor_winter.year, p_predictor_fwinter.year, p_predictor_winter.year_SD,
-                             p_predictor_lnArea_acres, p_predictor_ID, p_predictor_xy,
-          nrow=2, rel_widths = c(1, 1, 1, 1, 1, 1.25))
+predictor_xy_SD <- bind_rows(lapply(X=reml_gam_final_models_meta$models, parm="s.1(x,y)", FUN=fun_confint_xy))
+predictor_xy_SD <- left_join(predictor_xy_SD, reml_gam_final_models_meta, by=c("models"))
+
+p_predictor_xy_SD <- ggplot(predictor_xy_SD %>% filter(data=='all' & metric != "iceoutlong"), 
+                         aes(x=x/10000, y=y/100000, fill=.estimate)) + 
+  facet_grid(metric~.) + 
+  geom_raster(interpolate=T) + 
+  ggtitle("d) S.D. s(x,y)") + 
+  scale_y_continuous(name="y*100,000") +
+  scale_x_continuous(name="x*10,000") + 
+  scale_fill_gradient2(name="S.D.") + 
+  theme_classic(10) + theme() 
+
+
+## FIGURE--Multi-panel plot of predictors ----
+
+mat_p_predictor_all <- rbind(c(1, 1, 1, 2, 2, 2),
+                             c(3, 3, 3, 4, 4, 4),
+                             c(5, 5, 6, 6, 7, 7))
+
+p_predictor_all <- grid.arrange(p_predictor_winter.year, p_predictor_winter.year_SD,
+                             p_predictor_xy, p_predictor_xy_SD,
+                             p_predictor_lnArea_acres, p_predictor_ID, p_predictor_fwinter.year,
+                             layout_matrix=mat_p_predictor_all)
   
-png("figures/FigureS1_ModelPredictors.png", width=7, height=5, units='in', res=1200)
-p_predictor_all
+png("figures/FigureS1_ModelPredictors.png", width=7, height=9, units='in', res=1200)
+grid.arrange(p_predictor_winter.year, p_predictor_winter.year_SD,
+             p_predictor_xy, p_predictor_xy_SD,
+             p_predictor_lnArea_acres, p_predictor_ID, p_predictor_fwinter.year,
+             layout_matrix=mat_p_predictor_all)
 dev.off()
 
-
-# Increasing variance over time plot ----
+# Increasing variance over time plot updated with heteroskedastic models ----
 
 variance_over_time_df <- expand.grid(winter.year=1953:2022,
                                      metric=c("duration", "iceon", "iceout"),
@@ -202,7 +359,7 @@ variance_over_time_df <- expand.grid(winter.year=1953:2022,
 
 for(i in 1953:2022){
   #duration
-  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="duration"] <- sd(predictor_fwinter.year$est[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
+  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="duration"] <- sd(predictor_fwinter.year$.estimate[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
                                                                                                                          as.numeric(as.character(predictor_fwinter.year$parm)) > i - 5 & 
                                                                                                                            predictor_fwinter.year$metric=="duration"])
   
@@ -213,7 +370,7 @@ for(i in 1953:2022){
                                                                                                             & ice_all_condense$winter.year > i-5])
   
   #iceon
-  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="iceon"] <- sd(predictor_fwinter.year$est[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
+  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="iceon"] <- sd(predictor_fwinter.year$.estimate[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
                                                                                                                                                             as.numeric(as.character(predictor_fwinter.year$parm)) > i - 5 & 
                                                                                                                                                          predictor_fwinter.year$metric=="iceon"])
   
@@ -225,7 +382,7 @@ for(i in 1953:2022){
   
   
   #iceout
-  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="iceout"] <- sd(predictor_fwinter.year$est[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
+  variance_over_time_df$sd_fwinter.year[variance_over_time_df$winter.year==i & variance_over_time_df$metric=="iceout"] <- sd(predictor_fwinter.year$.estimate[as.numeric(as.character(predictor_fwinter.year$parm)) <= i & 
                                                                                                                                                          as.numeric(as.character(predictor_fwinter.year$parm)) > i - 5 & 
                                                                                                                                                          predictor_fwinter.year$metric=="iceout"])
   
@@ -284,9 +441,9 @@ p_varianceincrease_sdterm <- ggplot(data=predictor_winter.year_SD %>%
                                                    ifelse(metric=="iceon", "Formation",
                                                           ifelse(metric=="iceout", "Breakup", NA))),
                                             levels=c("Duration", "Formation", "Breakup"))), 
-                    aes(x=parm, y=est_shift, lty=metric2, col=metric2, fill=metric2)) + 
+                    aes(x=parm, y=.estimate_shift, lty=metric2, col=metric2, fill=metric2)) + 
   facet_grid(variable2~.) + 
-  geom_ribbon(aes(ymin=lower_shift, ymax=upper_shift), alpha=0.2, col=NA) + 
+  geom_ribbon(aes(ymin=.lower_ci_shift, ymax=.upper_ci_shift), alpha=0.2, col=NA) + 
   geom_line() + 
   scale_x_continuous("Winter Year") + 
   scale_y_continuous(expression(sigma[italic("i,t")]), 
@@ -310,7 +467,7 @@ p_varianceincrease_resid <- ggplot(data=variance_over_time_df %>% filter(variabl
   theme_classic(9) + theme(strip.background = element_rect(fill='lightyellow'),
                            legend.position='none')
 
-## FIGURE 1--Increasing variance over time ----
+## FIGURE: Increasing variance over time ----
 png("figures/Figure1_IncreasingVarianceOverTime.png", width=3.5, height=6, units='in', res=1200)
 plot_grid(p_varianceincrease_rawdata,
           p_varianceincrease_re,
@@ -331,12 +488,12 @@ for(i in reml_gam_final_models_meta$models){
   
   trends_df$est[trends_df$models==i] <- predict(get(i), 
                                               newdata=data.frame(winter.year=1949:2022), 
-                                              exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)"),
+                                              exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)", "s.1(x,y)"),
                                               newdata.guaranteed=T)[,1]
   
   trends_df$se[trends_df$models==i] <- predict(get(i), 
                                               newdata=data.frame(winter.year=1949:2022), 
-                                              exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)"),
+                                              exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)", "s.1(x,y)"),
                                              newdata.guaranteed=T,
                                              se.fit=T)$se.fit[,1]
   
@@ -346,6 +503,12 @@ trends_df <- trends_df %>%
   mutate(lower = est - 2*se, upper = est + 2*se)
 
 trends_df <- left_join(trends_df, reml_gam_final_models_meta, by="models")
+
+ggplot(trends_df, aes(x=winter.year, y=est, col=data, lty=data, fill=data)) + 
+  facet_grid(metric~., scales='free_y') + 
+  geom_ribbon(aes(ymin=lower, ymax=upper), col=NA, alpha=0.2) + 
+  geom_line() + 
+  theme_classic(9)
 
 fun_trends <- function(object){
   
@@ -359,7 +522,7 @@ fun_trends <- function(object){
 }
 
 trends_df <- bind_rows(lapply(X=reml_gam_final_models_meta$models, FUN=fun_trends)) %>%
-  dplyr::select(models, winter.year, est, se, lower, upper) %>%
+  dplyr::select(models, winter.year, .estimate, .se, .lower_ci, .upper_ci) %>%
   group_by(models, winter.year) %>%
   summarize_all(mean)
 
@@ -380,70 +543,69 @@ fun_derivatives <- function(object){
 }
 
 derivatives_df <- bind_rows(lapply(X=reml_gam_final_models_meta$models, FUN=fun_derivatives)) %>%
-  mutate(winter.year=data) %>%
-  dplyr::select(models, winter.year, derivative, se, lower, upper) %>%
+  dplyr::select(models, winter.year, .derivative, .se, .lower_ci, .upper_ci) %>%
   group_by(models, winter.year) %>%
   summarize_all(mean)
 
 derivatives_df <- left_join(derivatives_df, reml_gam_final_models_meta, by='models')
 
-# setting up the data frame to calculate relative change (% change)
-
-pred_df <- expand.grid(models=unique(derivatives_df$models),
-                       winter.year=1949:2022)
-
-pred_df$est <- NA
-pred_df$est_se <- NA
-
-for(i in unique(derivatives_df$models)){
-  
-  pred_df$est[pred_df$models==i] <- predict(get(i), 
-                                             newdata=data.frame(winter.year=pred_df$winter.year[pred_df$models==i]),
-                                             exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)"),
-                                             newdata.guaranteed=TRUE)[,1]
-  
-  pred_df$est_se[pred_df$models==i] <- predict(get(i), 
-                                            newdata=data.frame(winter.year=pred_df$winter.year[pred_df$models==i]),
-                                            exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)"),
-                                            newdata.guaranteed=TRUE, se.fit=TRUE)$se.fit[,1]
-  
-}
-
-derivatives_df <- full_join(derivatives_df, 
-                            pred_df,
-                            by=c("models", "winter.year"))
-
-derivatives_df$perc_change <- NA
-derivatives_df$perc_change_lower <- NA
-derivatives_df$perc_change_upper <- NA
-
-for(i in 1:dim(derivatives_df)[1]) {
-  
-  if(derivatives_df$winter.year[i] > 1949){
-    
-    derivatives_df$perc_change[i] <- (derivatives_df$derivative[i]/
-      derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
-                           derivatives_df$models==derivatives_df$models[i]])*100
-    
-    derivatives_df$perc_change_lower[i] <- (derivatives_df$lower[i]/
-                                        derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
-                                                             derivatives_df$models==derivatives_df$models[i]])*100
-    
-    derivatives_df$perc_change_upper[i] <- (derivatives_df$upper[i]/
-                                        derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
-                                                             derivatives_df$models==derivatives_df$models[i]])*100
-    
-  }
-  
-}
+# # setting up the data frame to calculate relative change (% change)
+# 
+# pred_df <- expand.grid(models=unique(derivatives_df$models),
+#                        winter.year=1949:2022)
+# 
+# pred_df$est <- NA
+# pred_df$est_se <- NA
+# 
+# for(i in unique(derivatives_df$models)){
+#   
+#   pred_df$est[pred_df$models==i] <- predict(get(i), 
+#                                              newdata=data.frame(winter.year=pred_df$winter.year[pred_df$models==i]),
+#                                              exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)", "s.1(x,y)"),
+#                                              newdata.guaranteed=TRUE)[,1]
+#   
+#   pred_df$est_se[pred_df$models==i] <- predict(get(i), 
+#                                             newdata=data.frame(winter.year=pred_df$winter.year[pred_df$models==i]),
+#                                             exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(winter.year)", "s.1(x,y)"),
+#                                             newdata.guaranteed=TRUE, se.fit=TRUE)$se.fit[,1]
+#   
+# }
+# 
+# derivatives_df <- full_join(derivatives_df, 
+#                             pred_df,
+#                             by=c("models", "winter.year"))
+# 
+# derivatives_df$perc_change <- NA
+# derivatives_df$perc_change_lower <- NA
+# derivatives_df$perc_change_upper <- NA
+# 
+# for(i in 1:dim(derivatives_df)[1]) {
+#   
+#   if(derivatives_df$winter.year[i] > 1949){
+#     
+#     derivatives_df$perc_change[i] <- (derivatives_df$derivative[i]/
+#       derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
+#                            derivatives_df$models==derivatives_df$models[i]])*100
+#     
+#     derivatives_df$perc_change_lower[i] <- (derivatives_df$lower[i]/
+#                                         derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
+#                                                              derivatives_df$models==derivatives_df$models[i]])*100
+#     
+#     derivatives_df$perc_change_upper[i] <- (derivatives_df$upper[i]/
+#                                         derivatives_df$est[derivatives_df$winter.year==derivatives_df$winter.year[i]-1 &
+#                                                              derivatives_df$models==derivatives_df$models[i]])*100
+#     
+#   }
+#   
+# }
 
 ## Trends plot for main text ----
 
-### duration
+### duration ----
 
 p_trend_duration_trend <- ggplot(trends_df%>%filter(metric=="duration"& data=="all"), 
-                                 aes(x=winter.year, y=est, lty=data)) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+                                 aes(x=winter.year, y=.estimate, lty=data)) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     ggtitle("Ice cover duration") + 
     scale_y_continuous("Days", breaks=c(135, 145, 155), labels=c(135, 145,155)) + 
@@ -453,20 +615,20 @@ p_trend_duration_trend <- ggplot(trends_df%>%filter(metric=="duration"& data=="a
                              plot.margin=unit(c(1,0.25, 0.25, 0.25), units='lines'))
   
 p_trend_duration_derivative <- ggplot(derivatives_df%>%filter(metric=="duration"& data=="all"), 
-                                      aes(x=winter.year, y=derivative, lty=data)) + 
+                                      aes(x=winter.year, y=.derivative, lty=data)) + 
     geom_hline(yintercept=0) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     scale_y_continuous("Days/year", limits=c(-0.43, 0.43)) + 
     scale_x_continuous("Winter Year") + 
     scale_linetype_discrete("Lake data") + 
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
 
-### iceon
+### iceon ----
 
 p_trend_iceon_trend <- ggplot(trends_df%>%filter(metric=="iceon"& data=="all"), 
-                              aes(x=winter.year, y=est, lty=data)) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+                              aes(x=winter.year, y=.estimate, lty=data)) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     ggtitle("Day of ice formation") + 
     scale_y_continuous("Day of year") + 
@@ -474,20 +636,20 @@ p_trend_iceon_trend <- ggplot(trends_df%>%filter(metric=="iceon"& data=="all"),
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
   
 p_trend_iceon_derivative <- ggplot(derivatives_df%>%filter(metric=="iceon"& data=="all"), 
-                                   aes(x=winter.year, y=derivative, lty=data)) + 
+                                   aes(x=winter.year, y=.derivative, lty=data)) + 
     geom_hline(yintercept=0) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     scale_y_continuous("Days/year", limits=c(-0.43, 0.43)) + 
     scale_x_continuous("Winter Year") + 
     scale_linetype_discrete("Lake data") + 
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
 
-### iceout
+### iceout ----
 
 p_trend_iceout_trend <- ggplot(trends_df%>%filter(metric=="iceout"& data=="all"), 
-                               aes(x=winter.year, y=est, lty=data)) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+                               aes(x=winter.year, y=.estimate, lty=data)) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     ggtitle("Day of ice breakup") + 
     scale_y_continuous("Day of year") + 
@@ -495,20 +657,20 @@ p_trend_iceout_trend <- ggplot(trends_df%>%filter(metric=="iceout"& data=="all")
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
   
 p_trend_iceout_derivative <- ggplot(derivatives_df%>%filter(metric=="iceout"& data=="all"), 
-                                    aes(x=winter.year, y=derivative, lty=data)) + 
+                                    aes(x=winter.year, y=.derivative, lty=data)) + 
     geom_hline(yintercept=0) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     scale_y_continuous("Days/year", limits=c(-0.43, 0.43)) + 
     scale_x_continuous("Winter Year") + 
     scale_linetype_discrete("Lake data") + 
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
   
-### iceoutlong
+### iceoutlong ----
 
 p_trend_iceoutlong_trend <- ggplot(trends_df%>%filter(metric=="iceoutlong"& data=="all"), 
-                                   aes(x=winter.year, y=est, lty=data)) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+                                   aes(x=winter.year, y=.estimate, lty=data)) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     ggtitle("Day of ice breakup\n(all data)") + 
     scale_y_continuous("Day of year") + 
@@ -516,17 +678,16 @@ p_trend_iceoutlong_trend <- ggplot(trends_df%>%filter(metric=="iceoutlong"& data
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
   
 p_trend_iceoutlong_derivative <- ggplot(derivatives_df%>%filter(metric=="iceoutlong"& data=="all"), 
-                                        aes(x=winter.year, y=derivative, lty=data)) + 
+                                        aes(x=winter.year, y=.derivative, lty=data)) + 
     geom_hline(yintercept=0) + 
-    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
+    geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) + 
     geom_line() + 
     scale_y_continuous("Days/year", limits=c(-0.43, 0.43)) + 
     scale_x_continuous("Winter Year") + 
     scale_linetype_discrete("Lake data") + 
     theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
 
-### FIGURE 2--Multi-panel plot of trends ----
-
+### FIGURE--Multi-panel plot of trends (all data)----
 png("figures/Figure2_Trends_Vertical.png", width=3.5, height=5.5, units='in', res=1200)
 grid.arrange(plot_grid(p_trend_duration_trend , p_trend_duration_derivative,
                        p_trend_iceon_trend, p_trend_iceon_derivative,
@@ -536,79 +697,161 @@ dev.off()
 
 ## Trends plot for supplement ----
 
-### duration
+### duration ----
 
-p_supp_trend_duration_trend <- ggplot(trends_df%>%filter(metric=="duration"), 
-                                      aes(x=winter.year, y=est, lty=data)) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  ggtitle("Ice cover duration") + 
-  scale_y_continuous("Duration (days)") + 
-  scale_linetype_discrete("Lake data") + 
-  theme_classic(9) + theme(legend.position=c(0.5, 1.25), 
+p_supp_trend_duration_trend <- ggplot(trends_df%>%filter(metric=="duration"),
+                                 aes(x=winter.year, y=.estimate, lty=data)) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  ggtitle("Ice cover duration") +
+  scale_y_continuous("Duration (days)") +
+  scale_linetype_discrete("Lake data") +
+  theme_classic(9) + theme(legend.position=c(0.5, 1.25),
                            legend.direction='horizontal',
                            axis.title.x=element_blank(),
                            plot.margin=unit(c(2,0.25, 0.25, 0.25), units='lines'))
 
-p_supp_trend_duration_derivative <- ggplot(derivatives_df%>%filter(metric=="duration"), 
-                                           aes(x=winter.year, y=derivative, lty=data)) + 
-  geom_hline(yintercept=0) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  scale_y_continuous("Change in duration\n(days/year)", limits=c(-0.43, 0.43)) + 
-  scale_x_continuous("Winter Year") + 
-  scale_linetype_discrete("Lake data") + 
+p_supp_trend_duration_derivative <- ggplot(derivatives_df%>%filter(metric=="duration"),
+                                      aes(x=winter.year, y=.derivative, lty=data)) +
+  geom_hline(yintercept=0) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  scale_y_continuous("Change in duration\n(days/year)", limits=c(-0.43, 0.43)) +
+  scale_x_continuous("Winter Year") +
+  scale_linetype_discrete("Lake data") +
   theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(3,0.25, 0.25, 0.25), units="lines"))
 
-### iceon
+### iceon ----
 
-p_supp_trend_iceon_trend <- ggplot(trends_df%>%filter(metric=="iceon"), 
-                                   aes(x=winter.year, y=est, lty=data)) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  ggtitle("Day of ice formation") + 
-  scale_y_continuous("Day of year") + 
-  scale_linetype_discrete("Lake data") + 
+p_supp_trend_iceon_trend <- ggplot(trends_df%>%filter(metric=="iceon"),
+                              aes(x=winter.year, y=.estimate, lty=data)) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  ggtitle("Day of ice formation") +
+  scale_y_continuous("Day of year") +
+  scale_linetype_discrete("Lake data") +
   theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
 
-p_supp_trend_iceon_derivative <- ggplot(derivatives_df%>%filter(metric=="iceon"), 
-                                        aes(x=winter.year, y=derivative, lty=data)) + 
-  geom_hline(yintercept=0) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  scale_y_continuous("Change in day of year\n(days/year)", limits=c(-0.43, 0.43)) + 
-  scale_x_continuous("Winter Year") + 
-  scale_linetype_discrete("Lake data") + 
+p_supp_trend_iceon_derivative <- ggplot(derivatives_df%>%filter(metric=="iceon"),
+                                   aes(x=winter.year, y=.derivative, lty=data)) +
+  geom_hline(yintercept=0) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  scale_y_continuous("Change in day of year\n(days/year)", limits=c(-0.43, 0.43)) +
+  scale_x_continuous("Winter Year") +
+  scale_linetype_discrete("Lake data") +
   theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
 
-### iceoutlong
+### iceout ----
 
-p_supp_trend_iceoutlong_trend <- ggplot(trends_df%>%filter(metric=="iceoutlong"), 
-                                        aes(x=winter.year, y=est, lty=data)) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  ggtitle("Day of ice breakup (all data)") + 
-  scale_y_continuous("Day of year") + 
-  scale_linetype_discrete("Lake data") +  
+p_supp_trend_iceout_trend <- ggplot(trends_df%>%filter(metric=="iceout"),
+                               aes(x=winter.year, y=.estimate, lty=data)) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  ggtitle("Day of ice breakup") +
+  scale_y_continuous("Day of year") +
+  scale_linetype_discrete("Lake data") +
   theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
 
-p_supp_trend_iceoutlong_derivative <- ggplot(derivatives_df%>%filter(metric=="iceoutlong"), 
-                                             aes(x=winter.year, y=derivative, lty=data)) + 
-  geom_hline(yintercept=0) + 
-  geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2, col=NA) + 
-  geom_line() + 
-  scale_y_continuous("Change in day of year\n(days/year)", limits=c(-0.43, 0.43)) + 
-  scale_x_continuous("Winter Year") + 
-  scale_linetype_discrete("Lake data") + 
+p_supp_trend_iceout_derivative <- ggplot(derivatives_df%>%filter(metric=="iceout"),
+                                    aes(x=winter.year, y=.derivative, lty=data)) +
+  geom_hline(yintercept=0) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  scale_y_continuous("Change in day of year\n(days/year)", limits=c(-0.43, 0.43)) +
+  scale_x_continuous("Winter Year") +
+  scale_linetype_discrete("Lake data") +
   theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
 
-### FIGURE S2--Multi-panel plot of trends with 10y and 30y datasets and larger iceout dataset ----
-png("figures/FigureS2_Trends_Vertical_AllBreakup.png", width=6, height=7, units='in', res=1200)
+### iceoutlong ----
+
+p_supp_trend_iceoutlong_trend <- ggplot(trends_df%>%filter(metric=="iceoutlong"),
+                                   aes(x=winter.year, y=.estimate, lty=data)) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  ggtitle("Day of ice breakup (all data)") +
+  scale_y_continuous("Day of year") +
+  scale_linetype_discrete("Lake data") +
+  theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(1,0.25, 0.25, 0.25), units="lines"))
+
+p_supp_trend_iceoutlong_derivative <- ggplot(derivatives_df%>%filter(metric=="iceoutlong"),
+                                        aes(x=winter.year, y=.derivative, lty=data)) +
+  geom_hline(yintercept=0) +
+  geom_ribbon(aes(ymin=.lower_ci, ymax=.upper_ci), alpha=0.2, col=NA) +
+  geom_line() +
+  scale_y_continuous("Change in day of year\n(days/year)", limits=c(-0.43, 0.43)) +
+  scale_x_continuous("Winter Year") +
+  scale_linetype_discrete("Lake data") +
+  theme_classic(9) + theme(legend.position='none', axis.title.x=element_blank(), plot.margin=unit(c(2,0.25, 0.25, 0.25), units="lines"))
+
+### FIGURE--Multi-panel plot of trends (comparison for supplement)----
+
+png("figures/FigSupp_Trends_Vertical.png", width=6, height=8, units='in', res=600)
+grid.arrange(plot_grid(p_supp_trend_duration_trend , p_supp_trend_duration_derivative,
+                       p_supp_trend_iceon_trend, p_supp_trend_iceon_derivative,
+                       p_supp_trend_iceout_trend, p_supp_trend_iceout_derivative,
+                       nrow=3, labels='auto'), bottom="Winter Year")
+dev.off()
+
+png("figures/FigureS2_Trends_Vertical_AllBreakup.png", width=6, height=8, units='in', res=1200)
 grid.arrange(plot_grid(p_supp_trend_duration_trend , p_supp_trend_duration_derivative,
                        p_supp_trend_iceon_trend, p_supp_trend_iceon_derivative,
                        p_supp_trend_iceoutlong_trend, p_supp_trend_iceoutlong_derivative,
                        nrow=3, labels='auto'), bottom="Winter Year")
 dev.off()
+
+
+## Comparison to Johnson and Stefan 2006 ----
+# https://link-springer-com.ezp2.lib.umn.edu/article/10.1007/s10584-006-0356-0
+summary(derivatives_df%>% filter(metric=="duration" & winter.year >= 1979 & winter.year <= 2002))
+
+# 1965 to 2002 comparison
+# J&S found iceout shifted to an earlier date at a rate of -0.13 days/year, 
+# we found iceout shifting -0.12 days/year
+derivatives_df %>%
+  filter(winter.year >= 1965 & winter.year <= 2002) %>%
+  group_by(metric) %>%
+  summarize(mean=mean(.derivative),
+            lower=mean(.lower_ci), 
+            upper=mean(.upper_ci))
+
+# 1979 - 2002 comparison
+# J&S found iceon has been delayed by 0.75 days/year
+# we found iceon shifting 0.09 days/year (NS)
+derivatives_df %>%
+  filter(winter.year >= 1979 & winter.year <= 2002) %>%
+  group_by(metric) %>%
+  summarize(mean=mean(.derivative),
+            lower=mean(.lower_ci), 
+            upper=mean(.upper_ci))
+
+# 1990 - 2002 comparison
+# J&S found -0.25 days/year for iceout, 1.44 days/year for iceon
+# we found -0.12 days/year for iceout, 0.11 days/year for iceon
+derivatives_df %>%
+  filter(winter.year >= 1990 & winter.year <= 2002) %>%
+  group_by(metric) %>%
+  summarize(mean=mean(.derivative),
+            lower=mean(.lower_ci), 
+            upper=mean(.upper_ci))
+
+# IMPORTANCE OF LONG-TERM PERSPECTIVE
+# If you look at those time periods with our raw data...it's comparable to J&S
+# 1990-2002 captures one of the most extreme periods of change in MN lake ice (see raw data figure)
+
+summary(lm(min_ice_off_julian~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1965 & winter.year<=2002)))# -0.12 days/year
+summary(lm(min_ice_off_julian~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1979 & winter.year<=2002)))# -0.09 days/year
+summary(lm(min_ice_off_julian~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1990 & winter.year<=2002)))# -0.21 days/year
+
+summary(lm(max_ice_on_julian2~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1965 & winter.year<=2002)))# +0.22 days/year
+summary(lm(max_ice_on_julian2~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1979 & winter.year<=2002)))# +0.5 days/year
+summary(lm(max_ice_on_julian2~winter.year, 
+           data=ice_w10y_condense %>% filter(winter.year>=1990 & winter.year<=2002)))# +1.7 days/year
 
 # Estimates of change from beginning to end of dataset ----
 
@@ -622,11 +865,11 @@ set.seed(8675309)
 for(i in 1:dim(reml_gam_final_models_meta)[1]){
   
   early_i <- colMeans(simulate(get(reml_gam_final_models_meta$models[i]),data=data.frame(winter.year=1949:1953), 
-                             exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"),
+                             exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(x,y)"),
                              newdata.guaranteed=T, nsim=10000)[, 1:10000])
   
   late_i <- colMeans(simulate(get(reml_gam_final_models_meta$models[i]),data=data.frame(winter.year=2018:2022), 
-                            exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"),
+                            exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)", "s.1(x,y)"),
                             newdata.guaranteed=T, nsim=10000)[, 1:10000])
   
   change_i <- late_i - early_i
@@ -660,7 +903,7 @@ change_df$perc_change <- (change_df$change/change_df$early)*100
 change_df$perc_change_lower <- (change_df$change_lower/change_df$early)*100
 change_df$perc_change_upper <- (change_df$change_upper/change_df$early)*100
 
-## TABLE 1, S2--change estimates----
+## TABLE--change estimates----
 
 write.csv(x=change_df, file="tables/change_estimates.csv")
 
@@ -668,7 +911,7 @@ write.csv(x=change_df, file="tables/change_estimates.csv")
 
 reml_gam_final_lakespecific_models_meta
 
-## duration
+## duration----
 
 stab_gamreml_lakespecific_duration <- summary(gamreml_lakespecific_duration)$s.table
 
@@ -730,7 +973,12 @@ p_lakespecific_duration <- ggplot() +
   scale_x_continuous(name="Winter Year", breaks=c(1970, 1990, 2010)) + 
   theme_classic(8) + theme(legend.position='top')
 
-## iceon
+## FIGURE--Big, multi-panel lake-specific trends for duration ----
+png("figures/Fig_LakeSpecificTrends_duration.png", width=7, height=7, units='in', res=600) 
+p_lakespecific_duration
+dev.off()
+
+## iceon----
 
 stab_gamreml_lakespecific_iceon <- summary(gamreml_lakespecific_iceon)$s.table
 
@@ -782,7 +1030,7 @@ p_lakespecific_iceon_condensed <- ggplot() +
   theme_classic(9) + theme(legend.position='none')
 
 
-## iceout
+## iceout----
 
 stab_gamreml_lakespecific_iceout <- summary(gamreml_lakespecific_iceout)$s.table
 
@@ -833,7 +1081,30 @@ p_lakespecific_iceout_condensed <- ggplot() +
   ggtitle("c) Day of ice breakup") + 
   theme_classic(9) + theme(legend.position='none')
 
-## FIGURE S3--Lake specific trends for all three metrics ----
+## FIGURE--Lake specific trends for all three metrics ----
+
+lakespecific_fsig_sum <- rbind(
+  lakespecific_duration_df %>%
+  group_by(fsig) %>%
+  summarize(n=n()/53) %>%
+  mutate(metric="duration",
+         p=n/sum(n),
+         perc=round(p*100, digits=1),
+         report=paste(n, ifelse(n==1, " lake (", " lakes ("), perc, "%)", sep="")),
+  lakespecific_iceon_df %>%
+    group_by(fsig) %>%
+    summarize(n=n()/53) %>%
+    mutate(metric="iceon",
+           p=n/sum(n),
+           perc=round(p*100, digits=1),
+           report=paste(n, ifelse(n==1, " lake (", " lakes ("), perc, "%)", sep="")),
+  lakespecific_iceout_df %>%
+    group_by(fsig) %>%
+    summarize(n=n()/53) %>%
+    mutate(metric="iceout",
+           p=n/sum(n),
+           perc=round(p*100, digits=1),
+           report=paste(n, ifelse(n==1, " lake (", " lakes ("), perc, "%)", sep="")))
 
 p_lakespecific_condensed <- plot_grid(
   
@@ -847,14 +1118,17 @@ png("figures/FigureS3_LakeSpecificTrends_Condensed.png", width=7, height=7, unit
 p_lakespecific_condensed
 dev.off()
 
+write.csv(x=lakespecific_fsig_sum, file="tables/lakespecific_fsig_sum.csv")
+
 # Maps and spatial analysis ----
 
 # Predictions
 # Here, we're looking at just the long-term trend, so fwinter.year is removed
+# I think we want to keep everything else
 
 ## Predictions for average trend from 1949 to 2022 across all lakes ----
 
-### duration
+### duration ----
 new.data_duration <- expand.grid(winter.year=c(1949, 2022), 
                                            ID=unique(gamreml_all_duration$model$ID))
 
@@ -872,7 +1146,7 @@ pred_duration <- predict.gam(gamreml_all_duration,
 new.data_duration$pred <- pred_duration$fit[,1]
 new.data_duration$se <- pred_duration$se.fit[,1]
 
-### iceon
+### iceon ----
 new.data_iceon <- expand.grid(winter.year=c(1949, 2022), 
                                            ID=unique(gamreml_all_iceon$model$ID))
 
@@ -890,7 +1164,7 @@ pred_iceon <- predict.gam(gamreml_all_iceon,
 new.data_iceon$pred <- pred_iceon$fit[,1]
 new.data_iceon$se <- pred_iceon$se.fit[,1]
 
-### iceout
+### iceout ----
 new.data_iceout <- expand.grid(winter.year=c(1949, 2022), 
                                            ID=unique(gamreml_all_iceout$model$ID))
 
@@ -908,7 +1182,7 @@ pred_iceout <- predict.gam(gamreml_all_iceout,
 new.data_iceout$pred <- pred_iceout$fit[,1]
 new.data_iceout$se <- pred_iceout$se.fit[,1]
 
-### iceoutlong
+### iceoutlong ----
 new.data_iceoutlong <- expand.grid(winter.year=c(1949, 2022), 
                                            ID=unique(gamreml_all_iceoutlong$model$ID))
 
@@ -926,7 +1200,7 @@ pred_iceoutlong <- predict.gam(gamreml_all_iceoutlong,
 new.data_iceoutlong$pred <- pred_iceoutlong$fit[, 1]
 new.data_iceoutlong$se <- pred_iceoutlong$se.fit[, 1]
 
-### combine predictions to single data frame
+### combine predictions to single data frame ----
 new.data_duration$variable <- "Duration"
 new.data_iceon$variable <- "Ice formation"
 new.data_iceout$variable <- "Ice breakup"
@@ -961,13 +1235,27 @@ vg_predicted_duration <- Variogram(object = new.data_spatial_sf$pred[new.data_sp
                                    distance = dist(data.frame(X = new.data_spatial_sf$X[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Duration"],
                                                               Y = new.data_spatial_sf$Y[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Duration"])))
 
+ggplot(vg_predicted_duration, aes(x = dist, y = variog)) + 
+  geom_point(alpha = 0.2) + 
+  geom_smooth(method = 'gam', formula = y~s(x))
+
+
 vg_predicted_iceon <- Variogram(object = new.data_spatial_sf$pred[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice formation"],
                                 distance = dist(data.frame(X = new.data_spatial_sf$X[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice formation"],
                                                            Y = new.data_spatial_sf$Y[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice formation"])))
 
+ggplot(vg_predicted_iceon, aes(x = dist, y = variog)) + 
+  geom_point(alpha = 0.2) + 
+  geom_smooth(method = 'gam', formula = y~s(x))
+
+
 vg_predicted_iceoff <- Variogram(object = new.data_spatial_sf$pred[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice breakup"],
                                  distance = dist(data.frame(X = new.data_spatial_sf$X[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice breakup"],
                                                             Y = new.data_spatial_sf$Y[new.data_spatial_sf$winter.year == 2022 & new.data_spatial_sf$variable == "Ice breakup"])))
+
+ggplot(vg_predicted_iceoff, aes(x = dist, y = variog)) + 
+  geom_point(alpha = 0.2) + 
+  geom_smooth(method = 'gam', formula = y~s(x))
 
 vg_predicted_duration$variable <- "Duration"
 vg_predicted_iceon$variable <- "Ice formation"
@@ -999,7 +1287,13 @@ p_predicted_variogram_allvars <- plot_grid(p_predicted_variogram_duration,
                                            p_predicted_variogram_onoff, 
                                            ncol = 1)
 
-## FIGURE 3--Map + semivariogram plot ----
+## FIGURE--Semivariogram----
+png("figures/Fig_SemiVariogramPlot_Predicted.png", width = 3.15, height = 5, units='in', res=600)
+p_predicted_variogram_allvars
+dev.off()
+
+
+## FIGURE--Map + semivariogram plot ----
 
 ### Maps ----
 p_pred_duration <- ggplot(data = new.data_spatial_sf %>% filter(variable == "Duration"), 
@@ -1095,9 +1389,113 @@ png("figures/Figure3_Map&Semivariogram.png", width = 5, height = 5.5, units='in'
 p_mapvariogram
 dev.off()
 
-# Sensitivity to time frame of analysis ----
+# Statewide comparisons ----
 
-## set up windows (time frames) ----
+## Statewide summary----
+statewide_sum <- new.data_spatial_sf %>%
+  filter(winter.year==2022) %>%
+  group_by(variable) %>%
+  summarize(mean=mean(pred),
+            sd=sd(pred),
+            min=min(pred),
+            q25=quantile(pred, probs=0.25),
+            median=median(pred),
+            q75=quantile(pred,probs=0.75),
+            max=max(pred),
+            q025=quantile(pred, probs=c(0.025)),
+            q975=quantile(pred, probs=c(0.975)))%>%
+  mutate(range=max-min,
+         range95=q975-q025, 
+         region="Statewide")
+
+## Northern MN summary----
+northernmost_sum <- new.data_spatial_sf %>%
+  filter(winter.year==2022 & 
+           y >= quantile(y, probs=0.9)) %>%
+  group_by(variable) %>%
+  summarize(mean=mean(pred),
+            sd=sd(pred),
+            min=min(pred),
+            q25=quantile(pred, probs=0.25),
+            median=median(pred),
+            q75=quantile(pred,probs=0.75),
+            max=max(pred),
+            q025=quantile(pred, probs=c(0.025)),
+            q975=quantile(pred, probs=c(0.975)))%>%
+  mutate(range=max-min,
+         range95=q975-q025, 
+         region="Northernmost")
+
+northernmost_sum2 <- new.data_spatial_sf %>%
+  filter(winter.year==2022 & 
+           y >= quantile(y, probs=0.75)) %>%
+  group_by(variable) %>%
+  summarize(mean=mean(pred),
+            sd=sd(pred),
+            min=min(pred),
+            q25=quantile(pred, probs=0.25),
+            median=median(pred),
+            q75=quantile(pred,probs=0.75),
+            max=max(pred),
+            q025=quantile(pred, probs=c(0.025)),
+            q975=quantile(pred, probs=c(0.975)))%>%
+  mutate(range=max-min,
+         range95=q975-q025, 
+         region="Northernmost")
+
+## Southern MN summary----
+southernmost_sum <- new.data_spatial_sf %>%
+  filter(winter.year==2022 & 
+           y <= quantile(y, probs=0.1)) %>%
+  group_by(variable) %>%
+  summarize(mean=mean(pred),
+            sd=sd(pred),
+            min=min(pred),
+            q25=quantile(pred, probs=0.25),
+            median=median(pred),
+            q75=quantile(pred,probs=0.75),
+            max=max(pred),
+            q025=quantile(pred, probs=c(0.025)),
+            q975=quantile(pred, probs=c(0.975)))%>%
+  mutate(range=max-min,
+         range95=q975-q025,
+         region="Southermost")
+
+southernmost_sum2 <- new.data_spatial_sf %>%
+  filter(winter.year==2022 & 
+           y <= quantile(y, probs=0.25)) %>%
+  group_by(variable) %>%
+  summarize(mean=mean(pred),
+            sd=sd(pred),
+            min=min(pred),
+            q25=quantile(pred, probs=0.25),
+            median=median(pred),
+            q75=quantile(pred,probs=0.75),
+            max=max(pred),
+            q025=quantile(pred, probs=c(0.025)),
+            q975=quantile(pred, probs=c(0.975)))%>%
+  mutate(range=max-min,
+         range95=q975-q025,
+         region="Southermost")
+
+## Combine and export----
+
+prediction_sum <- bind_rows(statewide_sum,
+                            northernmost_sum,
+                            southernmost_sum)
+prediction_sum2 <- bind_rows(statewide_sum,
+                            northernmost_sum2,
+                            southernmost_sum2)
+
+### TABLE--statewide prediction summaries----
+
+write.csv(x=prediction_sum %>% st_drop_geometry(), file="tables/prediction_sum.csv")
+write.csv(x=prediction_sum2 %>% st_drop_geometry(), file="tables/prediction_sum2.csv")
+
+
+# Window Study ----
+
+## set up windows ----
 window_df2 <- data.frame(length=74, start=1949, end=2022)
 
 for(i in c(seq(10, 70, 10), 74)){
@@ -1170,9 +1568,9 @@ for(i in 1:dim(window_df2)[1]){
                                  start=window_df2$start[i],
                                  end=window_df2$end[i],
                                  winter.year=year_seq_i,
-                                 est=confint_fwinter.year_i$est,
-                                 lower=confint_fwinter.year_i$lower,
-                                 upper=confint_fwinter.year_i$upper)
+                                 est=confint_fwinter.year_i$.estimate,
+                                 lower=confint_fwinter.year_i$.lower_ci,
+                                 upper=confint_fwinter.year_i$.upper_ci)
   
   window_fit_df2 <- rbind(window_fit_df2, window_fit_df2_i)
   
@@ -1184,14 +1582,14 @@ for(i in 1:dim(window_df2)[1]){
   pred_late <- predicted_samples(gam_fwinter.year_i, n=1000, data=late_i, exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"), newdata.guaranteed=TRUE)
   
   pred_early <- pred_early %>%
-    group_by(draw) %>%
-    summarize(response=mean(response))
+    group_by(.draw) %>%
+    summarize(.response=mean(.response))
   
   pred_late <- pred_late %>%
-    group_by(draw) %>%
-    summarize(response=mean(response))
+    group_by(.draw) %>%
+    summarize(.response=mean(.response))
   
-  pred_change <- pred_late$response - pred_early$response
+  pred_change <- pred_late$.response - pred_early$.response
   dt <- window_df2$end[i] - window_df2$start[i] - 5
   
   window_fit_df2_change_i <- data.frame(length=window_df2$length[i],
@@ -1273,36 +1671,475 @@ plot_grid(p_windows2_trends, p_windows2_change,
           nrow=1, labels="auto", label_size=9)
 dev.off()
 
-p_windows2_biplots <- grid.arrange(ggplot(data=window_fit_df2_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+p_windows2_biplots <- grid.arrange(ggplot(data=window_fit_df2_change, aes(x=end, y=change_century/10, pch=Sig, alpha=Sig, col=Dir)) + 
                                      facet_grid(length ~ ., scales="free_y") + 
                                      geom_hline(yintercept=0) + 
-                                     geom_hline(yintercept=window_fit_df2_change$change_century[window_fit_df2_change$length==74], lty=3) + 
+                                     geom_hline(yintercept=window_fit_df2_change$change_century[window_fit_df2_change$length==74]/10, lty=3) + 
                                      #geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=1) + 
                                      geom_point(cex=0.7) + 
                                      scale_shape_manual(values=c(1, 19)) + 
                                      scale_color_manual(values=c("dodgerblue", "red4")) +
                                      scale_alpha_manual(values=c(0.2, 1)) +
                                      scale_x_continuous("Last year in time frame") + 
-                                     scale_y_continuous("Estimated change over time frame (days/century)", breaks=pretty_breaks(n=3)) +
+                                     scale_y_continuous("Estimated change over time frame (days/decade)", breaks=pretty_breaks(n=3)) +
                                      theme_bw(8) + theme(legend.position='none'),
                                    right=textGrob("Time frame duration (years)", rot=-90, gp=gpar(fontsize=8)))
-p_windows2_biplots_werror <- grid.arrange(ggplot(data=window_fit_df2_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+p_windows2_biplots_werror <- grid.arrange(ggplot(data=window_fit_df2_change, aes(x=end, y=change_century/10, pch=Sig, alpha=Sig, col=Dir)) + 
                                      facet_grid(length ~ ., scales="free_y") + 
                                      geom_hline(yintercept=0) + 
-                                     geom_hline(yintercept=window_fit_df2_change$change_century[window_fit_df2_change$length==74], lty=3) + 
-                                     geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=0.7) + 
+                                     geom_hline(yintercept=window_fit_df2_change$change_century[window_fit_df2_change$length==74]/10, lty=3) + 
+                                     geom_errorbar(aes(ymin=change_century_lower/10, ymax=change_century_upper/10), width=0, lwd=0.7) + 
                                      geom_point(cex=0.7, pch=21, color='black') + 
                                      scale_shape_manual(values=c(1, 19)) + 
                                      scale_color_manual(values=c("dodgerblue", "red4")) +
                                      scale_alpha_manual(values=c(0.2, 1)) +
                                      scale_x_continuous("Last year in time frame") + 
-                                     scale_y_continuous("Estimated change over time frame (days/century)", breaks=pretty_breaks(n=3)) +
+                                     scale_y_continuous("Estimated change over time frame (days/decade)", breaks=pretty_breaks(n=3)) +
                                      theme_bw(8) + theme(legend.position='none'),
                                    right=textGrob("Time frame duration (years)", rot=-90, gp=gpar(fontsize=8)))
 
-## FIGURE 4--Sensitivty to time frame of analysis ----
+
+png("figures/Fig_WindowStudy2_Trend&Biplot.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_trends, p_windows2_biplots,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
 
 png("figures/Figure4_WindowStudy2_Trend&Biplot_wError.png", width=3.5, height=3.5, units='in', res=1200)
 plot_grid(p_windows2_trends, p_windows2_biplots_werror,
           nrow=1, labels="auto", label_size=9)
 dev.off()
+
+# Window Study (lakes with at least 10 years of data) ----
+
+## set up windows ----
+window_df2_w10y <- data.frame(length=74, start=1949, end=2022)
+
+for(i in c(seq(10, 70, 10), 74)){
+  
+  for(j in seq(1949, 2014, 1)){
+    
+    if(i < 74){
+      
+      evenly_i <- evenly(j:2022, by=i-1)
+      
+      window_start_i <- evenly_i[-length(evenly_i)]
+      window_end_i <- evenly_i[-1]
+      
+      window_df2_w10y_i <- data.frame(length=rep(i, length(window_start_i)),
+                                      start=window_start_i,
+                                      end=window_end_i)
+      
+      window_df2_w10y <- rbind(window_df2_w10y, window_df2_w10y_i)
+      
+    }
+    
+  }
+  
+}
+
+window_df2_w10y <- window_df2_w10y %>%
+  arrange(length, start)
+
+# I'm not sure why I'm getting duplicates here, I'm sure 
+# my code above is wrong, but this gets us what we want...
+window_df2_w10y <- window_df2_w10y %>% distinct()
+
+
+## fit models and pull trends and change estimates ----
+
+window_fit_df2_w10y <- data.frame(length=numeric(0),
+                                  start=numeric(0),
+                                  end=numeric(0),
+                                  winter.year=numeric(0),
+                                  est=numeric(0),
+                                  lower=numeric(0),
+                                  upper=numeric(0))
+
+window_fit_df2_w10y_change <- data.frame(length=numeric(0),
+                                         start=numeric(0),
+                                         end=numeric(0),
+                                         change=numeric(0),
+                                         change_lower=numeric(0),
+                                         change_upper=numeric(0),
+                                         change_century=numeric(0),
+                                         change_century_lower=numeric(0),
+                                         change_century_upper=numeric(0))
+
+for(i in 1:dim(window_df2_w10y)[1]){
+  #for(i in 1){
+  
+  gam_fwinter.year_i <- bam(min_duration ~ s(winter.year, k=4) + s(fwinter.year, bs='re') + s(lnArea_acres, k=5) + s(ID, bs='re') + s(x, y, k=5),
+                            data = ice_all_condense %>% filter(winter.year >= window_df2_w10y$start[i] & 
+                                                                 winter.year <= window_df2_w10y$end[i]),
+                            nthreads = detectCores() - 1,
+                            #method='REML', 
+                            select=TRUE)
+  
+  # Estimating Trends
+  year_seq_i <- window_df2_w10y$start[i]:window_df2_w10y$end[i]
+  # Intercept included in trends
+  confint_fwinter.year_i <- confint(object=gam_fwinter.year_i, parm="s(winter.year)", n=length(year_seq_i), type='simultaneous', shift=TRUE)
+  
+  window_fit_df2_w10y_i <- data.frame(length=window_df2_w10y$length[i],
+                                      start=window_df2_w10y$start[i],
+                                      end=window_df2_w10y$end[i],
+                                      winter.year=year_seq_i,
+                                      est=confint_fwinter.year_i$.estimate,
+                                      lower=confint_fwinter.year_i$.lower_ci,
+                                      upper=confint_fwinter.year_i$.upper_ci)
+  
+  window_fit_df2_w10y <- rbind(window_fit_df2_w10y, window_fit_df2_w10y_i)
+  
+  # Estimating change
+  early_i <- data.frame(winter.year=year_seq_i[year_seq_i<=window_df2_w10y$start[i]+4])
+  late_i <- data.frame(winter.year=year_seq_i[year_seq_i>=window_df2_w10y$end[i]-4])
+  
+  pred_early <- predicted_samples(gam_fwinter.year_i, n=1000, data=early_i, exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"), newdata.guaranteed=TRUE)
+  pred_late <- predicted_samples(gam_fwinter.year_i, n=1000, data=late_i, exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"), newdata.guaranteed=TRUE)
+  
+  pred_early <- pred_early %>%
+    group_by(draw) %>%
+    summarize(response=mean(response))
+  
+  pred_late <- pred_late %>%
+    group_by(draw) %>%
+    summarize(response=mean(response))
+  
+  pred_change <- pred_late$response - pred_early$response
+  dt <- window_df2_w10y$end[i] - window_df2_w10y$start[i] - 5
+  
+  window_fit_df2_w10y_change_i <- data.frame(length=window_df2_w10y$length[i],
+                                             start=window_df2_w10y$start[i],
+                                             end=window_df2_w10y$end[i],
+                                             change=mean(pred_change),
+                                             change_lower=quantile(pred_change, probs=0.025),
+                                             change_upper=quantile(pred_change, probs=0.975),
+                                             change_century=(mean(pred_change)/(dt))*100,
+                                             change_century_lower=(quantile(pred_change, probs=0.025)/(dt))*100,
+                                             change_century_upper=(quantile(pred_change, probs=0.975)/(dt))*100)
+  
+  window_fit_df2_w10y_change <- rbind(window_fit_df2_w10y_change, window_fit_df2_w10y_change_i)
+  
+  print(window_df2_w10y[i, ])
+  
+}
+
+window_fit_df2_w10y_change <- window_fit_df2_w10y_change %>%
+  mutate(Sig=ifelse(change_lower*change_upper <=0, "NS", "Sig."),
+         Dir=ifelse(change < 0, "Loss", "Gain"))
+
+summary(factor(paste(window_fit_df2_w10y_change$Sig, window_fit_df2_w10y_change$Dir)))
+summary(factor(paste(window_fit_df2_w10y$Sig, window_fit_df2_w10y$Dir)))
+
+# add info about significant change to window_fit_df2_w10y
+window_fit_df2_w10y <- left_join(window_fit_df2_w10y,
+                                 window_fit_df2_w10y_change %>%
+                                   dplyr::select(length, start, end, Sig, Dir),
+                                 by=join_by(length, start, end))
+
+# summarize change by window length
+window_fit_df2_w10y_change_sum <- window_fit_df2_w10y_change %>%
+  group_by(length) %>%
+  summarize(mean=mean(change_century),
+            sd=sd(change_century),
+            lower=quantile(change_century, probs=0.025),
+            upper=quantile(change_century, probs=0.975),
+            min=min(change_century),
+            max=max(change_century),
+            n=n()) %>%
+  mutate(n=n/length) %>%
+  ungroup()
+
+
+
+## plot trends and change estimates ----
+
+p_windows2_w10y_trends <- grid.arrange(ggplot(data=window_fit_df2_w10y, 
+                                              aes(x=winter.year, y=est, col=Dir, alpha=Sig, lty=factor(start))) + 
+                                         facet_grid(length~.) + 
+                                         geom_line() + 
+                                         scale_color_manual(values=c("dodgerblue", "red4")) + 
+                                         scale_alpha_manual(values=c(0.2, 1)) +
+                                         scale_linetype_manual(values=rep(1, length(unique(window_fit_df2_w10y$start)))) + 
+                                         scale_y_continuous("Estimated trend over window") + 
+                                         scale_x_continuous("Winter Year") + 
+                                         theme_bw(8) + theme(legend.position='none'))
+
+p_windows2_w10y_change <- grid.arrange(ggplot(data=window_fit_df2_w10y_change, aes(change_century)) + 
+                                         facet_grid(length ~ ., scales='free') + 
+                                         geom_vline(xintercept=0) + 
+                                         geom_histogram(fill='skyblue') + 
+                                         geom_point(data=window_fit_df2_w10y_change_sum,
+                                                    aes(x=mean, y=0),
+                                                    inherit.aes=FALSE,
+                                                    col="orange", cex=1.5) + 
+                                         geom_errorbarh(data=window_fit_df2_w10y_change_sum,
+                                                        aes(y=0, xmin=mean-sd, xmax=mean+sd),
+                                                        inherit.aes=FALSE,
+                                                        col='orange', height=0) + 
+                                         scale_x_continuous("Estimated change over window (days/century)") + 
+                                         scale_y_continuous("Number of estimates", breaks=pretty_breaks(n=3)) +
+                                         theme_bw(8),
+                                       right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+
+png("figures/Fig_WindowStudy2_w10y.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w10y_trends, p_windows2_w10y_change,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+p_windows2_w10y_biplots <- grid.arrange(ggplot(data=window_fit_df2_w10y_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+                                          facet_grid(length ~ ., scales="free_y") + 
+                                          geom_hline(yintercept=0) + 
+                                          geom_hline(yintercept=window_fit_df2_w10y_change$change_century[window_fit_df2_w10y_change$length==74], lty=3) + 
+                                          #geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=1) + 
+                                          geom_point(cex=0.7) + 
+                                          scale_shape_manual(values=c(1, 19)) + 
+                                          scale_color_manual(values=c("dodgerblue", "red4")) +
+                                          scale_alpha_manual(values=c(0.2, 1)) +
+                                          scale_x_continuous("Last year in window") + 
+                                          scale_y_continuous("Estimated change over window (days/century)", breaks=pretty_breaks(n=3)) +
+                                          theme_bw(8) + theme(legend.position='none'),
+                                        right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+p_windows2_w10y_biplots_werror <- grid.arrange(ggplot(data=window_fit_df2_w10y_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+                                                 facet_grid(length ~ ., scales="free_y") + 
+                                                 geom_hline(yintercept=0) + 
+                                                 geom_hline(yintercept=window_fit_df2_w10y_change$change_century[window_fit_df2_w10y_change$length==74], lty=3) + 
+                                                 geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=0.7) + 
+                                                 geom_point(cex=0.7, pch=21, color='black') + 
+                                                 scale_shape_manual(values=c(1, 19)) + 
+                                                 scale_color_manual(values=c("dodgerblue", "red4")) +
+                                                 scale_alpha_manual(values=c(0.2, 1)) +
+                                                 scale_x_continuous("Last year in window") + 
+                                                 scale_y_continuous("Estimated change over window (days/century)", breaks=pretty_breaks(n=3)) +
+                                                 theme_bw(8) + theme(legend.position='none'),
+                                               right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+
+
+png("figures/Fig_WindowStudy2_w10y_Trend&Biplot.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w10y_trends, p_windows2_w10y_biplots,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+png("figures/Fig_WindowStudy2_w10y_Trend&Biplot_wError.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w10y_trends, p_windows2_w10y_biplots_werror,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+
+# Window Study (lakes with at least 30 years of data) ----
+
+## set up windows ----
+window_df2_w30y <- data.frame(length=74, start=1949, end=2022)
+
+for(i in c(seq(10, 70, 10), 74)){
+  
+  for(j in seq(1949, 2014, 1)){
+    
+    if(i < 74){
+      
+      evenly_i <- evenly(j:2022, by=i-1)
+      
+      window_start_i <- evenly_i[-length(evenly_i)]
+      window_end_i <- evenly_i[-1]
+      
+      window_df2_w30y_i <- data.frame(length=rep(i, length(window_start_i)),
+                                 start=window_start_i,
+                                 end=window_end_i)
+      
+      window_df2_w30y <- rbind(window_df2_w30y, window_df2_w30y_i)
+      
+    }
+    
+  }
+  
+}
+
+window_df2_w30y <- window_df2_w30y %>%
+  arrange(length, start)
+
+# I'm not sure why I'm getting duplicates here, I'm sure 
+# my code above is wrong, but this gets us what we want...
+window_df2_w30y <- window_df2_w30y %>% distinct()
+
+
+## fit models and pull trends and change estimates ----
+
+window_fit_df2_w30y <- data.frame(length=numeric(0),
+                             start=numeric(0),
+                             end=numeric(0),
+                             winter.year=numeric(0),
+                             est=numeric(0),
+                             lower=numeric(0),
+                             upper=numeric(0))
+
+window_fit_df2_w30y_change <- data.frame(length=numeric(0),
+                                    start=numeric(0),
+                                    end=numeric(0),
+                                    change=numeric(0),
+                                    change_lower=numeric(0),
+                                    change_upper=numeric(0),
+                                    change_century=numeric(0),
+                                    change_century_lower=numeric(0),
+                                    change_century_upper=numeric(0))
+
+for(i in 1:dim(window_df2_w30y)[1]){
+  #for(i in 1){
+  
+  gam_fwinter.year_i <- bam(min_duration ~ s(winter.year, k=4) + s(fwinter.year, bs='re') + s(lnArea_acres, k=5) + s(ID, bs='re') + s(x, y, k=5),
+                            data = ice_all_condense %>% filter(winter.year >= window_df2_w30y$start[i] & 
+                                                                 winter.year <= window_df2_w30y$end[i]),
+                            nthreads = detectCores() - 1,
+                            #method='REML', 
+                            select=TRUE)
+  
+  # Estimating Trends
+  year_seq_i <- window_df2_w30y$start[i]:window_df2_w30y$end[i]
+  # Intercept included in trends
+  confint_fwinter.year_i <- confint(object=gam_fwinter.year_i, parm="s(winter.year)", n=length(year_seq_i), type='simultaneous', shift=TRUE)
+  
+  window_fit_df2_w30y_i <- data.frame(length=window_df2_w30y$length[i],
+                                 start=window_df2_w30y$start[i],
+                                 end=window_df2_w30y$end[i],
+                                 winter.year=year_seq_i,
+                                 est=confint_fwinter.year_i$.estimate,
+                                 lower=confint_fwinter.year_i$.lower_ci,
+                                 upper=confint_fwinter.year_i$.upper_ci)
+  
+  window_fit_df2_w30y <- rbind(window_fit_df2_w30y, window_fit_df2_w30y_i)
+  
+  # Estimating change
+  early_i <- data.frame(winter.year=year_seq_i[year_seq_i<=window_df2_w30y$start[i]+4])
+  late_i <- data.frame(winter.year=year_seq_i[year_seq_i>=window_df2_w30y$end[i]-4])
+  
+  pred_early <- predicted_samples(gam_fwinter.year_i, n=1000, data=early_i, exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"), newdata.guaranteed=TRUE)
+  pred_late <- predicted_samples(gam_fwinter.year_i, n=1000, data=late_i, exclude=c("s(fwinter.year)", "s(lnArea_acres)", "s(ID)", "s(x,y)"), newdata.guaranteed=TRUE)
+  
+  pred_early <- pred_early %>%
+    group_by(draw) %>%
+    summarize(response=mean(response))
+  
+  pred_late <- pred_late %>%
+    group_by(draw) %>%
+    summarize(response=mean(response))
+  
+  pred_change <- pred_late$response - pred_early$response
+  dt <- window_df2_w30y$end[i] - window_df2_w30y$start[i] - 5
+  
+  window_fit_df2_w30y_change_i <- data.frame(length=window_df2_w30y$length[i],
+                                        start=window_df2_w30y$start[i],
+                                        end=window_df2_w30y$end[i],
+                                        change=mean(pred_change),
+                                        change_lower=quantile(pred_change, probs=0.025),
+                                        change_upper=quantile(pred_change, probs=0.975),
+                                        change_century=(mean(pred_change)/(dt))*100,
+                                        change_century_lower=(quantile(pred_change, probs=0.025)/(dt))*100,
+                                        change_century_upper=(quantile(pred_change, probs=0.975)/(dt))*100)
+  
+  window_fit_df2_w30y_change <- rbind(window_fit_df2_w30y_change, window_fit_df2_w30y_change_i)
+  
+  print(window_df2_w30y[i, ])
+  
+}
+
+window_fit_df2_w30y_change <- window_fit_df2_w30y_change %>%
+  mutate(Sig=ifelse(change_lower*change_upper <=0, "NS", "Sig."),
+         Dir=ifelse(change < 0, "Loss", "Gain"))
+
+summary(factor(paste(window_fit_df2_w30y_change$Sig, window_fit_df2_w30y_change$Dir)))
+summary(factor(paste(window_fit_df2_w30y$Sig, window_fit_df2_w30y$Dir)))
+
+# add info about significant change to window_fit_df2_w30y
+window_fit_df2_w30y <- left_join(window_fit_df2_w30y,
+                            window_fit_df2_w30y_change %>%
+                              dplyr::select(length, start, end, Sig, Dir),
+                            by=join_by(length, start, end))
+
+# summarize change by window length
+window_fit_df2_w30y_change_sum <- window_fit_df2_w30y_change %>%
+  group_by(length) %>%
+  summarize(mean=mean(change_century),
+            sd=sd(change_century),
+            lower=quantile(change_century, probs=0.025),
+            upper=quantile(change_century, probs=0.975),
+            min=min(change_century),
+            max=max(change_century),
+            n=n()) %>%
+  mutate(n=n/length) %>%
+  ungroup()
+
+
+
+## plot trends and change estimates ----
+
+p_windows2_w30y_trends <- grid.arrange(ggplot(data=window_fit_df2_w30y, 
+                                         aes(x=winter.year, y=est, col=Dir, alpha=Sig, lty=factor(start))) + 
+                                    facet_grid(length~.) + 
+                                    geom_line() + 
+                                    scale_color_manual(values=c("dodgerblue", "red4")) + 
+                                    scale_alpha_manual(values=c(0.2, 1)) +
+                                    scale_linetype_manual(values=rep(1, length(unique(window_fit_df2_w30y$start)))) + 
+                                    scale_y_continuous("Estimated trend over window") + 
+                                    scale_x_continuous("Winter Year") + 
+                                    theme_bw(8) + theme(legend.position='none'))
+
+p_windows2_w30y_change <- grid.arrange(ggplot(data=window_fit_df2_w30y_change, aes(change_century)) + 
+                                    facet_grid(length ~ ., scales='free') + 
+                                    geom_vline(xintercept=0) + 
+                                    geom_histogram(fill='skyblue') + 
+                                    geom_point(data=window_fit_df2_w30y_change_sum,
+                                               aes(x=mean, y=0),
+                                               inherit.aes=FALSE,
+                                               col="orange", cex=1.5) + 
+                                    geom_errorbarh(data=window_fit_df2_w30y_change_sum,
+                                                   aes(y=0, xmin=mean-sd, xmax=mean+sd),
+                                                   inherit.aes=FALSE,
+                                                   col='orange', height=0) + 
+                                    scale_x_continuous("Estimated change over window (days/century)") + 
+                                    scale_y_continuous("Number of estimates", breaks=pretty_breaks(n=3)) +
+                                    theme_bw(8),
+                                  right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+
+png("figures/Fig_WindowStudy2_w30y.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w30y_trends, p_windows2_w30y_change,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+p_windows2_w30y_biplots <- grid.arrange(ggplot(data=window_fit_df2_w30y_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+                                     facet_grid(length ~ ., scales="free_y") + 
+                                     geom_hline(yintercept=0) + 
+                                     geom_hline(yintercept=window_fit_df2_w30y_change$change_century[window_fit_df2_w30y_change$length==74], lty=3) + 
+                                     #geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=1) + 
+                                     geom_point(cex=0.7) + 
+                                     scale_shape_manual(values=c(1, 19)) + 
+                                     scale_color_manual(values=c("dodgerblue", "red4")) +
+                                     scale_alpha_manual(values=c(0.2, 1)) +
+                                     scale_x_continuous("Last year in window") + 
+                                     scale_y_continuous("Estimated change over window (days/century)", breaks=pretty_breaks(n=3)) +
+                                     theme_bw(8) + theme(legend.position='none'),
+                                   right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+p_windows2_w30y_biplots_werror <- grid.arrange(ggplot(data=window_fit_df2_w30y_change, aes(x=end, y=change_century, pch=Sig, alpha=Sig, col=Dir)) + 
+                                            facet_grid(length ~ ., scales="free_y") + 
+                                            geom_hline(yintercept=0) + 
+                                            geom_hline(yintercept=window_fit_df2_w30y_change$change_century[window_fit_df2_w30y_change$length==74], lty=3) + 
+                                            geom_errorbar(aes(ymin=change_century_lower, ymax=change_century_upper), width=0, lwd=0.7) + 
+                                            geom_point(cex=0.7, pch=21, color='black') + 
+                                            scale_shape_manual(values=c(1, 19)) + 
+                                            scale_color_manual(values=c("dodgerblue", "red4")) +
+                                            scale_alpha_manual(values=c(0.2, 1)) +
+                                            scale_x_continuous("Last year in window") + 
+                                            scale_y_continuous("Estimated change over window (days/century)", breaks=pretty_breaks(n=3)) +
+                                            theme_bw(8) + theme(legend.position='none'),
+                                          right=textGrob("Window duration (years)", rot=-90, gp=gpar(fontsize=8)))
+
+
+png("figures/Fig_WindowStudy2_w30y_Trend&Biplot.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w30y_trends, p_windows2_w30y_biplots,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+png("figures/Fig_WindowStudy2_w30y_Trend&Biplot_wError.png", width=4, height=4, units='in', res=600)
+plot_grid(p_windows2_w30y_trends, p_windows2_w30y_biplots_werror,
+          nrow=1, labels="auto", label_size=9)
+dev.off()
+
+

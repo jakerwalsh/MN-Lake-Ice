@@ -1,18 +1,18 @@
-# Variable phenology but consistent loss of ice cover of 1,213 Minnesota lakes
-# Walsh et al. submitted to L&O Letters
-# Data set up
+# Long-term trends in lake ice
+# Hansen Lab Project (Revisit 2023)
 
 # Set up repository folders ----
-
-# The data folder has some of the climate indices and the lake shapefile
-# ifelse(!dir.exists("data"), 
-#        dir.create("data"), 
-#        "Folder exists already")
+ifelse(!dir.exists("data"), 
+       dir.create("data"), 
+       "Folder exists already")
 ifelse(!dir.exists("figures"), 
        dir.create("figures"), 
        "Folder exists already")
 ifelse(!dir.exists("tables"), 
        dir.create("tables"), 
+       "Folder exists already")
+ifelse(!dir.exists("exploration"), 
+       dir.create("exploration"), 
        "Folder exists already")
 ifelse(!dir.exists("outputdata"), 
        dir.create("outputdata"), 
@@ -21,98 +21,191 @@ ifelse(!dir.exists("outputdata"),
 # Data set up ----
 
 ## Packages ----
-# Data manipulation
+# Apologies - some of these are left over from old scripts, and we may not use them.
+
+# The "mnsentinellakes" package is downloaded through github using the package "remotes":
+# install.packages("remotes")
+# remotes::install_github("mnsentinellakes/mnsentinellakes")
+
+# Data manipulation, plotting
 library(tidyverse)
 library(viridis)
-library(lubridate)
-library(data.table)
-library(RCurl)
-
-# Plotting
 library(gridExtra)
 library(grid)
 library(broom)
 library(cowplot)
 library(scales)
 
-# Function for detrending climate indices
+library("googledrive")
+library(data.table)
+library(RCurl)
+
+# Nice for dealing with working directories
+library(here)
+
+# Time series breakpoint analysis
+library(strucchange)
+library(segmented)
+library(trend)# Includes a function for Sen's Slope
 library(pracma)
+
+# Linear mixed effects modeling
+library(lme4)
 
 # GAM
 library(mgcv)
 library(gratia)
+library(gamm4)
 library(itsadug)
-library(parallel)
 
-# Spatial
+library(lubridate)
+library(parallel)
+library(mnsentinellakes)
+
 library(sf)
 library(maps)
 
-# The "mnsentinellakes" package is downloaded through github using the package "remotes":
-install.packages("remotes")
-remotes::install_github("mnsentinellakes/mnsentinellakes")
+# Wavelet analysis
+library(vectorwavelet)
+library(wavelets)
+library(WaveletComp)
 
-library(mnsentinellakes)
 
-
-## Download data from DRUM ----
-# DRUM Repository:
-# https://conservancy.umn.edu/items/940c6197-486b-437c-96ca-cca9b4534dfa
-
-# Download the file and save it to the data folder
-download.file("https://conservancy.umn.edu/bitstreams/f66ca8ac-dedc-46c0-bf29-e136b0723a4a/download",
-               destfile="data/ice_duration.csv")
-download.file("https://conservancy.umn.edu/bitstreams/0a71aa4b-071a-4685-a84c-ea5e0fe0691c/download",
-               destfile="data/ice_in.csv")
-download.file("https://conservancy.umn.edu/bitstreams/32150e3a-62be-4f95-911f-9afbd9011fa4/download",
-               destfile="data/ice_out.csv")
-
+## Download data from Google Drive ----
+# All of these end up in the "data" folder
+# Wasn't sure how to download a folder, I think "drive_download" is just for files
+drive_download("https://drive.google.com/file/d/12sfEMIu2Mq1TfPGDqz-ShC18-FjhHdKM/view?usp=drive_link",
+               path="data/ice_duration_summarized.csv")
+drive_download("https://drive.google.com/file/d/12pI3h3fAg8TpKswBFRwyIqksElCymjm6/view?usp=drive_link",
+               path="data/Rainy&Kabetogama_ice_duration_summarized.csv")
+drive_download("https://drive.google.com/file/d/10vZYWBhdwEH4msV6myq3EAnHgl2KwteD/view?usp=drive_link",
+               path="data/ice_on_summarized.csv")
+drive_download("https://drive.google.com/file/d/1NO7qQmKOJSZsKOOveukIdMA-n-0WPCsD/view?usp=drive_link",
+               path="data/ice_off_summarized.csv")
+drive_download("https://drive.google.com/file/d/1BSGrPcYpKYb9bJEOQAsdc8KL8gJV8FdO/view?usp=drive_link",
+               path="data/Rainy&Kabetogama_ice_off_summarized.csv")
+drive_download("https://drive.google.com/file/d/1y5l_Larn97P5rpHm_cK-DJ9DEkUjUMHG/view?usp=drive_link",
+               path="data/mndow_lakes_sf_allDataUntransformed.rds")
+drive_download("https://drive.google.com/file/d/1qzRnAhLthryc9Bj2x6bvTkOHNcs_Xu1E/view?usp=drive_link",
+               path="data/QBO_NOAA.txt")
+drive_download("https://drive.google.com/file/d/1p2QebafmkckZXC9-j2WUYDvcLDU5sr13/view?usp=drive_link",
+               path="data/PDO_NOAA.txt")
+drive_download("https://drive.google.com/file/d/1b9kvLD0H3Q2Rq_WXfWbNK0dN5D1FmKEN/view?usp=drive_link",
+               path="data/SOLARCYCLE_NOAA.txt")
+drive_download("https://drive.google.com/file/d/1MbYazwIzYclZJRCnkBq5wDCfepiufc40/view?usp=drive_link",
+               path="data/NAO_DJFMwinter.txt")
+drive_download("https://drive.google.com/file/d/1PeLKss2zbfKSg_ZlLi91IFV33C3srMdN/view?usp=drive_link",
+               path="data/BESTlong_ENSO_NOAA.txt")
+drive_download("https://drive.google.com/file/d/1sQ4zHuMTivxGsNWEwvXgKrIk7qMTa7O8/view?usp=drive_link",
+               path="data/BEST_ENSO_NOAA.txt")
 
 ## Loading data into R project ----
 
 ### Ice cover data ----
 
-# Read ice files into R, classify relevant columns
-ice <- read.csv("data/ice_duration.csv", 
+ice <- read.csv("data/ice_duration_summarized.csv", 
                 stringsAsFactors = F) %>%
   mutate(min_ice_on_date = as.Date(min_ice_on_date),
          max_ice_on_date = as.Date(max_ice_on_date),
          min_ice_off_date = as.Date(min_ice_off_date),
          max_ice_off_date = as.Date(max_ice_off_date),
          DOW = fixlakeid(DOW),
+         fall.year = winter.year-1,
          fwinter.year=factor(winter.year),
-         ID=factor(ID))
+         max_ice_on_julian2 = ifelse(max_ice_on_julian < 200, 365 + max_ice_on_julian, max_ice_on_julian), min_ice_on_julian2 = ifelse(min_ice_on_julian < 200, 365 + min_ice_on_julian, min_ice_on_julian)) %>%
+  mutate(ID = factor(paste("dow", DOW, sep = "_"))) %>%
+  dplyr::select(-X)
 
-icein <- read.csv("data/ice_in.csv", 
+rk_ice <- read.csv("data/Rainy&Kabetogama_ice_duration_summarized.csv", 
+                   stringsAsFactors = F) %>%
+  mutate(min_ice_on_date = as.Date(min_ice_on_date),
+         max_ice_on_date = as.Date(max_ice_on_date),
+         min_ice_off_date = as.Date(min_ice_off_date),
+         max_ice_off_date = as.Date(max_ice_off_date),
+         DOW = fixlakeid(DOW),
+         fall.year = winter.year-1,
+         fwinter.year=factor(winter.year),
+         max_ice_on_julian2 = ifelse(max_ice_on_julian < 200, 365 + max_ice_on_julian, max_ice_on_julian), min_ice_on_julian2 = ifelse(min_ice_on_julian < 200, 365 + min_ice_on_julian, min_ice_on_julian)) %>%
+  mutate(ID = factor(paste("dow", DOW, sep = "_"))) %>%
+  dplyr::select(-1)
+head(rk_ice)
+
+icein <- read.csv("data/ice_on_summarized.csv", 
                   stringsAsFactors = F) %>%
   mutate(min_ice_on_date = as.Date(min_ice_on_date),
          max_ice_on_date = as.Date(max_ice_on_date),
          DOW = fixlakeid(DOW),
-         fwinter.year=factor(winter.year)) %>%
-  mutate(ID = factor(paste("dow", DOW, sep = "_")))
+         fall.year = winter.year-1,
+         fwinter.year=factor(winter.year),
+         max_ice_on_julian2 = ifelse(max_ice_on_julian < 200, 365 + max_ice_on_julian, max_ice_on_julian), min_ice_on_julian2 = ifelse(min_ice_on_julian < 200, 365 + min_ice_on_julian, min_ice_on_julian)) %>%
+  mutate(ID = factor(paste("dow", DOW, sep = "_"))) %>%
+  dplyr::select(-X)
 
-iceout <- read.csv("data/ice_out.csv", 
+iceout <- read.csv("data/ice_off_summarized.csv", 
                    stringsAsFactors = F) %>%
   mutate(min_ice_off_date = as.Date(min_ice_off_date),
          max_ice_off_date = as.Date(max_ice_off_date),
          DOW = fixlakeid(DOW),
-         fwinter.year=factor(winter.year),
-         ID=factor(ID))
+         winter.year=year) %>%
+  mutate(ID = factor(paste("dow", DOW, sep = "_")),
+         fall.year = winter.year-1,
+         fwinter.year=factor(winter.year)) %>%
+  dplyr::select(-X)
+
+rk_iceout <- read.csv("data/Rainy&Kabetogama_ice_off_summarized.csv", 
+                      stringsAsFactors = F) %>%
+  mutate(min_ice_off_date = as.Date(min_ice_off_date),
+         max_ice_off_date = as.Date(max_ice_off_date),
+         DOW = fixlakeid(DOW),
+         winter.year=year) %>%
+  mutate(ID = factor(paste("dow", DOW, sep = "_")),
+         fall.year = winter.year-1,
+         fwinter.year=factor(winter.year)) %>%
+  dplyr::select(-1)
+
+# Add rk_ice and rk_iceout to ice and iceout objects
+ice <- rbind(ice, rk_ice)
+iceout <- rbind(iceout, rk_iceout)
+
+# Test for and remove duplicated Rainy & Kabetogama data
+ice %>% filter(duplicated(ice)) # no duplicates
+iceout %>% filter(duplicated(iceout)) # duplicates
+
+iceout <- unique(iceout)
+
+# There are still multiple observations for some iceout lake years in Rainy & Kabetogama
+ice %>% group_by(winter.year, ID) %>% count() %>% filter(n> 1) # good!
+iceout %>% group_by(winter.year, ID) %>% count() %>% filter(n> 1)
+
+# select minimum duration and ice off values and maximum ice on values
+
+iceout <- iceout %>%
+  group_by(DOW, year, winter.year, ID, fall.year, fwinter.year) %>%
+  summarize(min_ice_off_julian=min(min_ice_off_julian),
+            max_ice_off_julian=max(max_ice_off_julian),
+            min_ice_off_date=min(min_ice_off_date),
+            max_ice_off_date=max(max_ice_off_date),
+            N_ice_off=sum(N_ice_off),
+            range_ice_off=max_ice_off_julian-min_ice_off_julian) %>%
+  ungroup() %>%
+  as.data.frame()
+
+# check for multiple observations
+iceout %>% group_by(winter.year, ID) %>% count() %>% filter(n> 1) # good!
 
 # Number lakes for each ice metric
 length(unique(ice$DOW)) # 1244 lakes
-length(unique(icein$DOW)) # 1479 lakes
+length(unique(icein$DOW)) # 1478 lakes
 length(unique(iceout$DOW)) # 1871 lakes
 
 ### Lake size ----
-
-# Shapefile contains lake polygons
 MN.shape <-  readRDS("data/mndow_lakes_sf_allDataUntransformed.rds")
 st_crs(MN.shape) <- 26915
 
 
 # Aggregate polygons by DOW
 MN.shape_agg <- MN.shape %>% group_by(dowlknum) %>% summarise()
+#rm(MN.shape)
 
 # Measure lake area
 MN.shape_agg$AggDOW_Area_m2 <- st_area(MN.shape_agg)
@@ -131,6 +224,7 @@ ice_spatial$lnArea_acres <- log(ice_spatial$Area_acres)
 
 # Iceout data
 iceout_spatial <- inner_join(iceout, MN.shape_agg) %>% rename(Area_acres=AggDOW_Area_acres) %>%  dplyr::select(-dowlknum)
+str(iceout_spatial)
 iceout_spatial$ID <- as.factor(iceout_spatial$ID)
 iceout_spatial$Area_acres <- as.numeric(iceout_spatial$Area_acres)
 iceout_spatial$AggDOW_Area_m2 <- as.numeric(iceout_spatial$AggDOW_Area_m2)
@@ -141,12 +235,16 @@ iceout_spatial$lnArea_acres <- log(iceout_spatial$Area_acres)
 states <- st_as_sf(maps::map("state", plot = FALSE, fill = TRUE))
 states <- st_transform(states, crs = st_crs(MN.shape_agg))
 
-# MN
 MN_outline <- st_as_sf(states %>% filter(ID == "minnesota"))
 
 # MN Counties
 MN_counties <- st_as_sf(maps::map("county", regions = "minnesota", plot = FALSE, fill = TRUE))
 MN_counties <- st_transform(MN_counties, crs = st_crs(MN.shape_agg))
+
+MN_arrowheadcounties <- MN_counties %>% filter(ID%in%c("minnesota,carlton", "minnesota,cook", "minnesota,lake", "minnesota,st louis"))
+MN_arrowheadcounties_outline <- st_union(MN_arrowheadcounties)
+
+
 
 ### Climate indices ----
 
@@ -175,86 +273,164 @@ colnames(best_enso_new) <- c("year", paste("month", 1:12, sep = ""))
 
 enso <- rbind(best_enso_old %>% filter(year < 1948), best_enso_new)
 
+#### Summarize and detrend monthly indices ----
+# annual (Jan-Dec) averages (e.g., QBO) and 
+# July (fall year) -June (winter year) averages (e.g., QBOjj)
+# ie, July is prior to formation and June is after breakup
 
-### Add climate indices to ice cover data----
-ice_spatial$ENSO <- NA
-ice_spatial$NAO <- NA
-ice_spatial$QBO <- NA
-ice_spatial$SUN <- NA
-ice_spatial$PDO <- NA
-ice_spatial$ENSOjj <- NA
-ice_spatial$QBOjj <- NA
-ice_spatial$SUNjj <- NA
-ice_spatial$PDOjj <- NA
+# detrend indices (e.g., QBO_dt or QBOjj_dt)
 
-# Match winter.year with mean annual climate index values (climate index values are constant across lake)
-for(i in 1:nrow(ice_spatial)){
-  # Year out averages
-  if(ice_spatial$winter.year[i] %in% enso$year) ice_spatial$ENSO[i] <- rowMeans(enso[enso$year == ice_spatial$winter.year[i], 2:13])
-  if(ice_spatial$winter.year[i] %in% qbo$year) ice_spatial$QBO[i] <- rowMeans(qbo[qbo$year == ice_spatial$winter.year[i], 2:13])
-  if(ice_spatial$winter.year[i] %in% sun$year) ice_spatial$SUN[i] <- rowMeans(sun[sun$year == ice_spatial$winter.year[i], 2:13])
-  if(ice_spatial$winter.year[i] %in% pdo$year) ice_spatial$PDO[i] <- rowMeans(pdo[pdo$year == ice_spatial$winter.year[i], 2:13])
-  if(ice_spatial$winter.year[i] %in% nao$year) ice_spatial$NAO[i] <- nao$index[nao$year == ice_spatial$winter.year[i]]
-  
-  # June-June averages: winter.year=months 1-6 (cols 2-7), fall.year=months 7-12 (cols 8-13)
-  if(ice_spatial$winter.year[i] %in% enso$year & ice_spatial$fall.year[i] %in% enso$year) ice_spatial$ENSOjj[i] <- rowMeans(cbind(enso[enso$year == ice_spatial$fall.year[i], 8:13], enso[enso$year == ice_spatial$winter.year[i], 2:7]))
-  if(ice_spatial$winter.year[i] %in% qbo$year & ice_spatial$fall.year[i] %in% qbo$year) ice_spatial$QBOjj[i] <- rowMeans(cbind(qbo[qbo$year == ice_spatial$fall.year[i], 8:13], qbo[qbo$year == ice_spatial$winter.year[i], 2:7]))
-  if(ice_spatial$winter.year[i] %in% sun$year & ice_spatial$fall.year[i] %in% sun$year) ice_spatial$SUNjj[i] <- rowMeans(cbind(sun[sun$year == ice_spatial$fall.year[i], 8:13], sun[sun$year == ice_spatial$winter.year[i], 2:7]))
-  if(ice_spatial$winter.year[i] %in% pdo$year & ice_spatial$fall.year[i] %in% pdo$year) ice_spatial$PDOjj[i] <- rowMeans(cbind(pdo[pdo$year == ice_spatial$fall.year[i], 8:13], pdo[pdo$year == ice_spatial$winter.year[i], 2:7]))
-}
+# QBO
+QBO <- qbo %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="QBO") %>%
+  mutate(winter.year=year) %>%
+  group_by(winter.year) %>%
+  summarize(QBO=mean(QBO, na.rm=T)) %>%
+  mutate(QBO_dt=detrend(QBO, tt='linear'))
 
-# Add climate indices to ice out
-iceout_spatial$ENSO <- NA
-iceout_spatial$NAO <- NA
-iceout_spatial$QBO <- NA
-iceout_spatial$SUN <- NA
-iceout_spatial$PDO <- NA
-iceout_spatial$ENSOjj <- NA
-iceout_spatial$QBOjj <- NA
-iceout_spatial$SUNjj <- NA
-iceout_spatial$PDOjj <- NA
+QBOjj <- qbo %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="QBO") %>%
+  separate_wider_delim(month_lab, "month", names=c("text", "month")) %>%
+  dplyr::select(-text) %>%
+  mutate(month=as.numeric(month),
+         fall.year=year-1,
+         winter.year=ifelse(month<7, fall.year, year)) %>%
+  group_by(winter.year) %>%
+  summarize(QBOjj=mean(QBO, na.rm=T)) %>%
+  mutate(QBOjj_dt=detrend(QBOjj, tt='linear'))
 
-# Match winter.year with mean annual climate index values (climate index values are constant across lake)
-for(i in 1:nrow(iceout_spatial)){
-  # Year out averages
-  if(iceout_spatial$winter.year[i] %in% enso$year) iceout_spatial$ENSO[i] <- rowMeans(enso[enso$year == iceout_spatial$winter.year[i], 2:13])
-  if(iceout_spatial$winter.year[i] %in% qbo$year) iceout_spatial$QBO[i] <- rowMeans(qbo[qbo$year == iceout_spatial$winter.year[i], 2:13])
-  if(iceout_spatial$winter.year[i] %in% sun$year) iceout_spatial$SUN[i] <- rowMeans(sun[sun$year == iceout_spatial$winter.year[i], 2:13])
-  if(iceout_spatial$winter.year[i] %in% pdo$year) iceout_spatial$PDO[i] <- rowMeans(pdo[pdo$year == iceout_spatial$winter.year[i], 2:13])
-  if(iceout_spatial$winter.year[i] %in% nao$year) iceout_spatial$NAO[i] <- nao$index[nao$year == iceout_spatial$winter.year[i]]
-  
-  # June-July averages: winter.year=months 1-6 (cols 2-7), fall.year=months 7-12 (cols 8-13)
-  if(iceout_spatial$winter.year[i] %in% enso$year & iceout_spatial$fall.year[i] %in% enso$year) iceout_spatial$ENSOjj[i] <- rowMeans(cbind(enso[enso$year == iceout_spatial$fall.year[i], 8:13], enso[enso$year == iceout_spatial$winter.year[i], 2:7]))
-  if(iceout_spatial$winter.year[i] %in% qbo$year & iceout_spatial$fall.year[i] %in% qbo$year) iceout_spatial$QBOjj[i] <- rowMeans(cbind(qbo[qbo$year == iceout_spatial$fall.year[i], 8:13], qbo[qbo$year == iceout_spatial$winter.year[i], 2:7]))
-  if(iceout_spatial$winter.year[i] %in% sun$year & iceout_spatial$fall.year[i] %in% sun$year) iceout_spatial$SUNjj[i] <- rowMeans(cbind(sun[sun$year == iceout_spatial$fall.year[i], 8:13], sun[sun$year == iceout_spatial$winter.year[i], 2:7]))
-  if(iceout_spatial$winter.year[i] %in% pdo$year & iceout_spatial$fall.year[i] %in% pdo$year) iceout_spatial$PDOjj[i] <- rowMeans(cbind(pdo[pdo$year == iceout_spatial$fall.year[i], 8:13], pdo[pdo$year == iceout_spatial$winter.year[i], 2:7]))
-}
+# view QBO
+ggplot() + 
+  geom_line(aes(x=QBO$winter.year, y=QBO$QBO)) + 
+  geom_line(aes(x=QBO$winter.year, y=QBO$QBO_dt), lty=2) + 
+  geom_line(aes(x=QBOjj$winter.year, y=QBOjj$QBOjj), col='red') + 
+  geom_line(aes(x=QBOjj$winter.year, y=QBOjj$QBOjj_dt), lty=2, col='red') + 
+  theme_classic(12)
+
+# PDO
+PDO <- pdo %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="PDO") %>%
+  mutate(winter.year=year) %>%
+  group_by(winter.year) %>%
+  summarize(PDO=mean(PDO, na.rm=T)) %>%
+  mutate(PDO_dt=detrend(PDO, tt='linear'))
+
+PDOjj <- pdo %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="PDO") %>%
+  separate_wider_delim(month_lab, "month", names=c("text", "month")) %>%
+  dplyr::select(-text) %>%
+  mutate(month=as.numeric(month),
+         fall.year=year-1,
+         winter.year=ifelse(month<7, fall.year, year)) %>%
+  group_by(winter.year) %>%
+  summarize(PDOjj=mean(PDO, na.rm=T)) %>%
+  mutate(PDOjj_dt=detrend(PDOjj, tt='linear'))
+
+# view PDO
+ggplot() + 
+  geom_line(aes(x=PDO$winter.year, y=PDO$PDO)) + 
+  geom_line(aes(x=PDO$winter.year, y=PDO$PDO_dt), lty=2) + 
+  geom_line(aes(x=PDOjj$winter.year, y=PDOjj$PDOjj), col='red') + 
+  geom_line(aes(x=PDOjj$winter.year, y=PDOjj$PDOjj_dt), lty=2, col='red') + 
+  theme_classic(12)
+
+# SUN
+SUN <- sun %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="SUN") %>%
+  mutate(winter.year=year) %>%
+  group_by(winter.year) %>%
+  summarize(SUN=mean(SUN, na.rm=T)) %>%
+  mutate(SUN_dt=detrend(SUN, tt='linear'))
+
+SUNjj <- sun %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="SUN") %>%
+  separate_wider_delim(month_lab, "month", names=c("text", "month")) %>%
+  dplyr::select(-text) %>%
+  mutate(month=as.numeric(month),
+         fall.year=year-1,
+         winter.year=ifelse(month<7, fall.year, year)) %>%
+  group_by(winter.year) %>%
+  summarize(SUNjj=mean(SUN, na.rm=T)) %>%
+  mutate(SUNjj_dt=detrend(SUNjj, tt='linear'))
+
+# view SUN
+ggplot() + 
+  geom_line(aes(x=SUN$winter.year, y=SUN$SUN)) + 
+  geom_line(aes(x=SUN$winter.year, y=SUN$SUN_dt), lty=2) + 
+  geom_line(aes(x=SUNjj$winter.year, y=SUNjj$SUNjj), col='red') + 
+  geom_line(aes(x=SUNjj$winter.year, y=SUNjj$SUNjj_dt), lty=2, col='red') + 
+  theme_classic(12)
 
 
-### Detrend indices----
-# "detrend" is in the package "pracma"
+# NAO
+NAO <- data.frame(winter.year=nao$year,
+                  NAO=nao$index,
+                  NAO_dt=detrend(nao$index, tt='linear'))
 
-ice_spatial <- ice_spatial %>%
-  mutate(ENSO_dt=detrend(ENSO, tt="linear"),
-         NAO_dt=detrend(NAO, tt="linear"),
-         QBO_dt=detrend(QBO, tt="linear"),
-         SUN_dt=detrend(SUN, tt="linear"),
-         PDO_dt=detrend(PDO, tt="linear"),
-         ENSOjj_dt=detrend(ENSOjj, tt="linear"),
-         QBOjj_dt=detrend(QBOjj, tt="linear"),
-         SUNjj_dt=detrend(SUNjj, tt="linear"),
-         PDOjj_dt=detrend(PDOjj, tt="linear"))
+# view NAO
+ggplot() + 
+  geom_line(aes(x=NAO$winter.year, y=NAO$NAO)) + 
+  geom_line(aes(x=NAO$winter.year, y=NAO$NAO_dt), lty=2) + 
+  theme_classic(12)
 
-iceout_spatial <- iceout_spatial %>%
-  mutate(ENSO_dt=detrend(ENSO, tt="linear"),
-         NAO_dt=detrend(NAO, tt="linear"),
-         QBO_dt=detrend(QBO, tt="linear"),
-         SUN_dt=detrend(SUN, tt="linear"),
-         PDO_dt=detrend(PDO, tt="linear"),
-         ENSOjj_dt=detrend(ENSOjj, tt="linear"),
-         QBOjj_dt=detrend(QBOjj, tt="linear"),
-         SUNjj_dt=detrend(SUNjj, tt="linear"),
-         PDOjj_dt=detrend(PDOjj, tt="linear"))
+# ENSO
+ENSO <- enso %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="ENSO") %>%
+  mutate(winter.year=year) %>%
+  group_by(winter.year) %>%
+  summarize(ENSO=mean(ENSO, na.rm=T)) %>%
+  mutate(ENSO_dt=detrend(ENSO, tt='linear'))
+
+ENSOjj <- enso %>% 
+  filter(year <= 2022) %>%
+  pivot_longer(month1:month12, names_to="month_lab", values_to="ENSO") %>%
+  separate_wider_delim(month_lab, "month", names=c("text", "month")) %>%
+  dplyr::select(-text) %>%
+  mutate(month=as.numeric(month),
+         fall.year=year-1,
+         winter.year=ifelse(month<7, fall.year, year)) %>%
+  group_by(winter.year) %>%
+  summarize(ENSOjj=mean(ENSO, na.rm=T)) %>%
+  mutate(ENSOjj_dt=detrend(ENSOjj, tt='linear'))
+
+# view ENSO
+ggplot() + 
+  geom_line(aes(x=ENSO$winter.year, y=ENSO$ENSO)) + 
+  geom_line(aes(x=ENSO$winter.year, y=ENSO$ENSO_dt), lty=2) + 
+  geom_line(aes(x=ENSOjj$winter.year, y=ENSOjj$ENSOjj), col='red') + 
+  geom_line(aes(x=ENSOjj$winter.year, y=ENSOjj$ENSOjj_dt), lty=2, col='red') + 
+  theme_classic(12)
+
+
+### Join climate indices to ice cover data----
+
+ice_spatial <- left_join(ice_spatial, QBO, by='winter.year') %>%
+  left_join(., QBOjj, by='winter.year') %>%
+  left_join(., PDO, by='winter.year') %>%
+  left_join(., PDOjj, by='winter.year') %>%
+  left_join(., SUN, by='winter.year') %>%
+  left_join(., SUNjj, by='winter.year') %>%
+  left_join(., NAO, by='winter.year') %>%
+  left_join(., ENSO, by='winter.year') %>%
+  left_join(., ENSOjj, by='winter.year')
+
+iceout_spatial <- left_join(iceout_spatial, QBO, by='winter.year') %>%
+  left_join(., QBOjj, by='winter.year') %>%
+  left_join(., PDO, by='winter.year') %>%
+  left_join(., PDOjj, by='winter.year') %>%
+  left_join(., SUN, by='winter.year') %>%
+  left_join(., SUNjj, by='winter.year') %>%
+  left_join(., NAO, by='winter.year') %>%
+  left_join(., ENSO, by='winter.year') %>%
+  left_join(., ENSOjj, by='winter.year')
+
 
 ### Add x and y coordinates to ice cover data----
 
@@ -364,7 +540,7 @@ length(unique(ice_w30y_condense$ID)) # 54 lakes with 50 yrs ice duration data si
 dim(ice_w30y_condense) # 2247 observations
 range(ice_w30y_condense$winter.year) # 1949-2022
 
-# Condense ice_all data
+
 ice_all_condense <- ice_spatial %>% dplyr::select(min_duration, max_duration, winter.year, fwinter.year, ID, x, y, ENSO, ENSOjj, NAO, QBO, QBOjj, SUN, SUNjj, PDO, PDOjj, lnArea_acres, Area_acres, min_ice_on_julian, max_ice_on_julian, max_ice_on_julian2, min_ice_off_julian, max_ice_off_julian, min_duration, max_duration)
 ice_all_condense <- ice_all_condense[complete.cases(ice_all_condense),]
 
@@ -384,11 +560,11 @@ iceout_w30y_condense <- iceout_w30y %>% dplyr::select(winter.year, fwinter.year,
 iceout_w30y_condense <- iceout_w30y_condense[complete.cases(iceout_w30y_condense),]
 
 length(unique(iceout_w10y_condense$ID))  # 586 lakes with 10 yrs ice off since 1949
-dim(iceout_w10y_condense) # 14291
+dim(iceout_w10y_condense) # 14428
 range(iceout_w10y_condense$winter.year) # 1949-2022
 
 length(unique(iceout_w30y_condense$ID))  # 163 lakes with 50 yrs ice off since 1949
-dim(iceout_w30y_condense) # 7663 observations
+dim(iceout_w30y_condense) # 7800 observations
 range(iceout_w30y_condense$winter.year) # 1949-2022
 
 iceout_all_condense <- iceout_spatial %>% dplyr::select(winter.year, fwinter.year, ID, x, y, ENSO, ENSOjj, NAO, QBO, QBOjj, SUN, SUNjj, PDO, PDOjj, lnArea_acres, Area_acres, min_ice_off_julian, max_ice_off_julian)
@@ -404,5 +580,16 @@ ice_w10y1970_condense <- ice_w10y1970 %>% dplyr::select(min_duration, max_durati
 ice_w10y1970_condense <- ice_w10y1970_condense[complete.cases(ice_w10y1970_condense),]
 ice_w10y1970_condense$ID <- droplevels(ice_w10y1970_condense$ID )
 
+
 dim(ice_w10y1970_condense) # 1531 observations
 length(unique(ice_w10y1970_condense$ID)) # 41 lakes
+
+## Plot median lake area and sample size over time -- lakes w/ 10 yrs since 1949----
+size_sum <- ice_w10y_condense %>% group_by(winter.year) %>% summarise(avg_size=mean(Area_acres), avg_logsize=log(mean(Area_acres)), med_size=median(Area_acres), med_logsize=log(median(Area_acres)), min_size=min(Area_acres), max_size=max(Area_acres), min_logsize=log(min(Area_acres)), max_logsize=log(max(Area_acres)), n=n())
+
+# Plot size over time
+plot(med_size~winter.year, data=size_sum, type='l', xlim=c(1949, 2019), ylim=c(0, 3000), las=1, ylab="Area (acres)", xlab="Year", cex.lab=1.2, cex.axis=1.2)
+
+# Plot number lakes over time: NumLakes_vsYear_1950.png
+plot(n~winter.year, data=size_sum, type='l', xlim=c(1949, 2019), las=1, ylab="Number of lakes", xlab="Year", ylim=c(0, 200))
+
